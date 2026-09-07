@@ -2,6 +2,9 @@ unit ueyesapp;
 
 {$mode objfpc}{$H+}
 
+{ One model, two canvases. Tick() takes *screen* mouse (idle / blink).
+  RenderBar / RenderDesk take *canvas* mouse so each view aims locally. }
+
 interface
 
 uses
@@ -19,9 +22,9 @@ type
   TEyesController = class
   public
     Model: TEyesModel;
-    Bar: TPixelBuffer;
-    Desk: TPixelBuffer;
-    ShowDesktop: Boolean;
+    Bar: TPixelBuffer;   { menu extra / tray / panel icon }
+    Desk: TPixelBuffer;  { optional floating window }
+    ShowDesktop: Boolean; { host reads this; we do not create windows }
     constructor Create(BarW, BarH, DeskW, DeskH: Integer);
     destructor Destroy; override;
     procedure Tick(Dt, MouseScreenX, MouseScreenY: Double);
@@ -51,6 +54,7 @@ end;
 
 procedure TEyesController.Tick(Dt, MouseScreenX, MouseScreenY: Double);
 begin
+  { Screen space on purpose: idle/sleep must not depend on which view is open. }
   Model.Update(Dt, MouseScreenX, MouseScreenY);
 end;
 
@@ -61,7 +65,7 @@ var
 begin
   Layout := MakeLayout(Bar.Width, Bar.Height);
   Pose := Model.Pose(Vec2(MouseCanvasX, MouseCanvasY), Layout);
-  RenderEyes(Bar, Pose, False);
+  RenderEyes(Bar, Pose, False); { no platinum plate in the menu bar }
 end;
 
 procedure TEyesController.RenderDesk(MouseCanvasX, MouseCanvasY: Double);
@@ -71,7 +75,7 @@ var
 begin
   Layout := MakeLayout(Desk.Width, Desk.Height);
   Pose := Model.Pose(Vec2(MouseCanvasX, MouseCanvasY), Layout);
-  RenderEyes(Desk, Pose, True);
+  RenderEyes(Desk, Pose, True); { same blink, different aim }
 end;
 
 procedure TEyesController.ToggleDesktop;

@@ -2,6 +2,9 @@ unit uhostgtk;
 
 {$mode objfpc}{$H+}
 
+{ Linux panel extra (GtkStatusIcon) + optional window. Same TEyesController;
+  FPC's gtk2 unit often omits status-icon symbols, so they are cdecl externals. }
+
 interface
 
 procedure HostRun;
@@ -17,6 +20,7 @@ type
   PGtkStatusIcon = Pointer;
 
 function gtk_status_icon_new: PGtkStatusIcon; cdecl; external;
+{ Not always in the FPC gtk2 ppu; the linker still finds them in libgtk-x11-2.0. }
 procedure gtk_status_icon_set_from_pixbuf(icon: PGtkStatusIcon; pixbuf: PGdkPixbuf); cdecl; external;
 procedure gtk_status_icon_set_visible(icon: PGtkStatusIcon; visible: gboolean); cdecl; external;
 procedure gtk_status_icon_set_tooltip_text(icon: PGtkStatusIcon; text: Pgchar); cdecl; external;
@@ -52,6 +56,7 @@ begin
   begin
     Src := Buf.Ptr + Row * Buf.Width * 4;
     Dst := Pixels + Row * gdk_pixbuf_get_rowstride(Pix);
+    { Rowstride can be larger than width*4; copy one scanline at a time. }
     Move(Src^, Dst^, Buf.Width * 4);
   end;
 end;
@@ -128,7 +133,7 @@ procedure OnDeskDelete(Widget: PGtkWidget; Event: PGdkEvent; Data: gpointer): gb
 begin
   Controller.ShowDesktop := False;
   gtk_widget_hide(Widget);
-  Result := True;
+  Result := True; { stop GTK destroying the window so we can show it again }
 end;
 
 function OnTick(Data: gpointer): gboolean; cdecl;
@@ -145,7 +150,7 @@ begin
   g_get_current_time(@Now);
   if not HaveTick then
   begin
-    LastTick := Now;
+    LastTick := Now; { first tick only stamps time so dt is not “since process start” }
     HaveTick := True;
     Dt := 1 / 30;
   end
@@ -153,7 +158,7 @@ begin
     Dt := (Now.tv_sec - LastTick.tv_sec) + (Now.tv_usec - LastTick.tv_usec) / 1000000.0;
   LastTick := Now;
 
-  gdk_display_get_pointer(gdk_display_get_default, nil, @MX, @MY, nil);
+  gdk_display_get_pointer(gdk_display_get_default, nil, @MX, @MY, nil); { may fail on Wayland }
   Controller.Tick(Dt, MX, MY);
 
   FillChar(Area, SizeOf(Area), 0);
@@ -162,6 +167,7 @@ begin
     Canvas := MouseToCanvas(MX, MY, Area.x, Area.y, Area.width, Area.height,
       Controller.Bar.Width, Controller.Bar.Height, False)
   else
+    { Icon not embedded yet: pretend the extra is top-right of the screen. }
     Canvas := MouseToCanvas(MX, MY, gdk_screen_get_width(gdk_screen_get_default) - BarW, 0,
       BarW, BarH, Controller.Bar.Width, Controller.Bar.Height, False);
   Controller.RenderBar(Canvas.X, Canvas.Y);
@@ -174,19 +180,19 @@ begin
     OX := 0;
     OY := 0;
     if Win <> nil then
-      gdk_window_get_origin(Win, @OX, @OY);
+      gdk_window_get_origin(Win, @OX, @OY); { window origin in root coords, for MouseToCanvas }
     Canvas := MouseToCanvas(MX, MY, OX, OY, DeskW, DeskH,
       Controller.Desk.Width, Controller.Desk.Height, False);
     Controller.RenderDesk(Canvas.X, Canvas.Y);
     PixbufFromBuffer(DeskPix, Controller.Desk);
     gtk_image_set_from_pixbuf(PGtkImage(DeskImage), DeskPix);
   end;
-  Result := True;
+  Result := True; { keep the timeout; False would cancel the 33 ms loop }
 end;
 
 procedure HostRun;
 begin
-  gtk_init(@argc, @argv);
+  gtk_init(@argc, @argv); { GTK takes the real argv so --display still works }
   Controller := TEyesController.Create(BarW, BarH, DeskW * 2, DeskH * 2);
   Controller.ShowDesktop := True;
 
@@ -203,13 +209,13 @@ begin
   gtk_window_set_title(PGtkWindow(DeskWin), 'Eyes');
   gtk_window_set_default_size(PGtkWindow(DeskWin), DeskW, DeskH);
   gtk_window_set_keep_above(PGtkWindow(DeskWin), True);
-  gtk_window_set_skip_taskbar_hint(PGtkWindow(DeskWin), False);
+  gtk_window_set_skip_taskbar_hint(PGtkWindow(DeskWin), False); { appear on the panel task list }
   DeskImage := gtk_image_new;
   gtk_container_add(PGtkContainer(DeskWin), DeskImage);
   g_signal_connect(G_OBJECT(DeskWin), 'delete-event', TG_SIGNAL_FUNC(@OnDeskDelete), nil);
 
-  g_timeout_add(33, TGSourceFunc(@OnTick), nil);
-  OnTick(nil);
+  g_timeout_add(33, TGSourceFunc(@OnTick), nil); { ~30 FPS, GUI thread }
+  OnTick(nil); { first frame before gtk_main so the icon is not blank }
   SyncDesktop;
   gtk_main;
   Controller.Free;

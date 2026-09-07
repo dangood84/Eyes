@@ -2,6 +2,9 @@ unit uhostwin;
 
 {$mode objfpc}{$H+}
 
+{ Windows tray icon + taskbar window. Same TEyesController as macOS;
+  this unit only presents pixels (BGRA HICON + StretchDIBits). }
+
 interface
 
 procedure HostRun;
@@ -15,7 +18,7 @@ uses
 
 const
   AppName = 'EyesClassicPtr';
-  WmTray = WM_APP + 42;
+  WmTray = WM_APP + 42; { not a system message; tray callback lands here }
   IdTray = 1;
   CmdDesktop = 1001;
   CmdAbout = 1002;
@@ -56,7 +59,7 @@ begin
   FillChar(Info, SizeOf(Info), 0);
   Info.bmiHeader.biSize := SizeOf(BITMAPINFOHEADER);
   Info.bmiHeader.biWidth := Buf.Width;
-  Info.bmiHeader.biHeight := -Buf.Height;
+  Info.bmiHeader.biHeight := -Buf.Height; { negative = top-down DIB, matches our y-down buffer }
   Info.bmiHeader.biPlanes := 1;
   Info.bmiHeader.biBitCount := 32;
   Info.bmiHeader.biCompression := BI_RGB;
@@ -70,7 +73,7 @@ begin
   Mask := CreateBitmap(Buf.Width, Buf.Height, 1, 1, nil);
   FillChar(IconInfo, SizeOf(IconInfo), 0);
   IconInfo.fIcon := True;
-  IconInfo.hbmMask := Mask;
+  IconInfo.hbmMask := Mask; { 1-bit mask required even for a 32-bit colour icon }
   IconInfo.hbmColor := Dib;
   Result := CreateIconIndirect(IconInfo);
   if Dib <> 0 then
@@ -94,7 +97,7 @@ begin
     FillChar(Info, SizeOf(Info), 0);
     Info.bmiHeader.biSize := SizeOf(BITMAPINFOHEADER);
     Info.bmiHeader.biWidth := Controller.Desk.Width;
-    Info.bmiHeader.biHeight := -Controller.Desk.Height;
+    Info.bmiHeader.biHeight := -Controller.Desk.Height; { same top-down DIB as the tray icon }
     Info.bmiHeader.biPlanes := 1;
     Info.bmiHeader.biBitCount := 32;
     Info.bmiHeader.biCompression := BI_RGB;
@@ -122,7 +125,7 @@ begin
   AppendMenu(Menu, MF_SEPARATOR, 0, nil);
   AppendMenu(Menu, MF_STRING, CmdQuit, PChar('Quit Eyes'));
   GetCursorPos(Pt);
-  SetForegroundWindow(Wnd);
+  SetForegroundWindow(Wnd); { without this, a tray popup often vanishes on the first click }
   TrackPopupMenu(Menu, TPM_RIGHTBUTTON, Pt.X, Pt.Y, 0, Wnd, nil);
   DestroyMenu(Menu);
 end;
@@ -133,7 +136,7 @@ begin
   begin
     ShowWindow(Wnd, SW_SHOW);
     SetWindowPos(Wnd, HWND_TOPMOST, 0, 0, 0, 0,
-      SWP_NOMOVE or SWP_NOSIZE or SWP_NOACTIVATE);
+      SWP_NOMOVE or SWP_NOSIZE or SWP_NOACTIVATE); { keep the taskbar button }
   end
   else
     ShowWindow(Wnd, SW_HIDE);
@@ -154,6 +157,7 @@ begin
   Mouse := MousePos;
   Controller.Tick(Dt, Mouse.X, Mouse.Y);
 
+  { Tray icons have no reliable geometry API here; aim against the virtual screen. }
   Controller.RenderBar(
     MouseToCanvas(Mouse.X, Mouse.Y, 0, 0, GetSystemMetrics(SM_CXSCREEN), GetSystemMetrics(SM_CYSCREEN),
       Controller.Bar.Width, Controller.Bar.Height, False).X,
@@ -168,12 +172,13 @@ begin
     if TrayIcon.hIcon <> 0 then
       DestroyIcon(TrayIcon.hIcon);
     TrayIcon.hIcon := Icon;
-    Shell_NotifyIcon(NIM_MODIFY, @TrayIcon);
+    Shell_NotifyIcon(NIM_MODIFY, @TrayIcon); { replacing the HICON is what animates the tray }
   end;
 
   if Controller.ShowDesktop then
   begin
     GetClientRect(Wnd, @Client);
+    { Client is local; pupils aim in screen space, so both corners go through ClientToScreen. }
     ClientToScreen(Wnd, PPoint(@Client.Left)^);
     ClientToScreen(Wnd, PPoint(@Client.Right)^);
     Canvas := MouseToCanvas(Mouse.X, Mouse.Y, Client.Left, Client.Top,
@@ -182,7 +187,7 @@ begin
     Controller.RenderDesk(Canvas.X, Canvas.Y);
     SetLength(BgraDesk, Controller.Desk.Width * Controller.Desk.Height * 4);
     CopyBGRA(Controller.Desk, @BgraDesk[0]);
-    InvalidateRect(Wnd, nil, False);
+    InvalidateRect(Wnd, nil, False); { WM_PAINT will StretchDIBits; erase=False avoids flicker }
   end;
 end;
 
@@ -193,7 +198,7 @@ begin
     WM_CREATE:
       begin
         LastTick := GetTickCount64;
-        SetTimer(Wnd, 1, 33, nil);
+        SetTimer(Wnd, 1, 33, nil); { ~30 FPS, same cadence as the Cocoa NSTimer }
       end;
     WM_TIMER:
       TickFrame(Wnd);
@@ -223,6 +228,7 @@ begin
       end;
     WM_CLOSE:
       begin
+        { Hide, do not destroy — the tray extra stays, like closing the Mac window. }
         Controller.ShowDesktop := False;
         SyncDesktop(Wnd);
       end;
@@ -246,7 +252,7 @@ var
   ScreenW, ScreenH: Integer;
 begin
   Controller := TEyesController.Create(BarW, BarH, DeskW * 2, DeskH * 2);
-  Controller.ShowDesktop := True;
+  Controller.ShowDesktop := True; { Windows: window is how they appear on the taskbar }
 
   FillChar(WC, SizeOf(WC), 0);
   WC.lpfnWndProc := @WndProc;
@@ -259,6 +265,7 @@ begin
   ScreenW := GetSystemMetrics(SM_CXSCREEN);
   ScreenH := GetSystemMetrics(SM_CYSCREEN);
   MainWnd := CreateWindowEx(WS_EX_APPWINDOW or WS_EX_TOPMOST, AppName, 'Eyes',
+    { APPWINDOW = taskbar button; TOOLWINDOW would hide it. }
     WS_OVERLAPPED or WS_CAPTION or WS_SYSMENU or WS_MINIMIZEBOX,
     ScreenW - DeskW - 40, ScreenH - DeskH - 80, DeskW + 16, DeskH + 40,
     0, 0, HInstance, nil);

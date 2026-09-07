@@ -3,6 +3,9 @@ unit uhostcocoa;
 {$mode objfpc}{$H+}
 {$modeswitch objectivec1}
 
+{ macOS menu extra. Accessory policy + LSUIElement = no Dock icon.
+  The pair is an NSStatusItem image, refreshed ~30 Hz from the Pascal canvas. }
+
 interface
 
 procedure HostRun;
@@ -22,6 +25,8 @@ type
   TEyesDeskView = objcclass;
 
   NSBitmapImageRepEyes = objccategory external (NSBitmapImageRep)
+    { FPC truncates the real method name past 127 chars; this category keeps
+      a short Pascal identifier and the full ObjC selector. }
     function initRGBA(planes: Pointer; aWidth: NSInteger; aHeight: NSInteger;
       aBits: NSInteger; aSamples: NSInteger; aAlpha: ObjCBOOL;
       aPlanar: ObjCBOOL; aSpace: NSString; aBpr: NSInteger;
@@ -39,7 +44,7 @@ type
     animTimer: NSTimer;
     scale: Double;
     lastTick: NSTimeInterval;
-    ready: ObjCBOOL;
+    ready: ObjCBOOL; { setup is called from HostRun *and* didFinishLaunching }
     procedure applicationDidFinishLaunching(notification: NSNotification); message 'applicationDidFinishLaunching:';
     procedure tick(timer: NSTimer); message 'tick:';
     procedure quitAction(sender: id); message 'quitAction:';
@@ -86,6 +91,7 @@ begin
     Result.addRepresentation(Rep);
     Rep.release;
   end;
+  { Template images become monochrome menu-bar glyphs; we want cream sclera. }
   Result.setTemplate(False);
   Result.setCacheMode(NSImageCacheNever);
 end;
@@ -99,11 +105,12 @@ var
 begin
   if (statusItem = nil) or (controller = nil) then
     Exit;
-  Mouse := NSEvent.mouseLocation;
+  Mouse := NSEvent.mouseLocation; { global, no Accessibility permission }
   Btn := statusItem.button;
   if (Btn <> nil) and (Btn.window <> nil) then
   begin
     Bounds := Btn.window.convertRectToScreen(Btn.convertRect_toView(Btn.bounds, nil));
+    { FlipY: Cocoa y-up vs the y-down pixel buffer. }
     BarCanvas := MouseToCanvas(Mouse.x, Mouse.y, Bounds.origin.x, Bounds.origin.y,
       Bounds.size.width, Bounds.size.height, controller.Bar.Width, controller.Bar.Height, True);
   end
@@ -117,6 +124,8 @@ begin
     BarPointsW, BarPointsH);
   if Btn <> nil then
   begin
+    { Clearing first forces NSStatusItem to drop the cached extra. Reusing one
+      NSImage and calling recache leaves the pair frozen on frame one. }
     Btn.setImage(nil);
     Btn.setImage(barImage);
     Btn.setNeedsDisplay_(True);
@@ -148,7 +157,7 @@ begin
   deskWindow.setLevel(NSStatusWindowLevel);
   deskWindow.setHidesOnDeactivate(False);
   if controller.ShowDesktop then
-    deskWindow.orderFrontRegardless
+    deskWindow.orderFrontRegardless { accessory apps are never “active” }
   else
     deskWindow.orderOut(nil);
 end;
@@ -172,6 +181,7 @@ begin
     PixelScale := 1;
   scale := PixelScale;
 
+  { Buffers are pixels; status-item size is points. }
   controller := TEyesController.Create(
     Round(BarPointsW * scale), Round(BarPointsH * scale),
     Round(DeskPointsW * scale), Round(DeskPointsH * scale));
@@ -194,10 +204,10 @@ begin
   Item.release;
 
   statusItem := NSStatusBar.systemStatusBar.statusItemWithLength(BarPointsW);
-  statusItem.retain;
+  statusItem.retain; { statusItemWithLength may return an autoreleased item }
   statusItem.setMenu(Menu);
   if statusItem.button <> nil then
-    statusItem.button.setImagePosition(NSImageOnly);
+    statusItem.button.setImagePosition(NSImageOnly); { no “Eyes” title next to the pair }
   Menu.release;
 
   Style := NSTitledWindowMask or NSClosableWindowMask or NSMiniaturizableWindowMask;
@@ -213,20 +223,21 @@ begin
     Vis, Style, NSBackingStoreBuffered, False);
   deskWindow.setTitle(NSStr('Eyes'));
   deskWindow.setLevel(NSStatusWindowLevel);
-  deskWindow.setReleasedWhenClosed(False);
+  deskWindow.setReleasedWhenClosed(False); { close box hides; we reuse this window }
   deskWindow.setHidesOnDeactivate(False);
   deskWindow.setOpaque(True);
   deskWindow.setBackgroundColor(NSColor.colorWithCalibratedRed_green_blue_alpha(0.91, 0.89, 0.85, 1.0));
-  deskWindow.setCollectionBehavior(NSWindowCollectionBehaviorCanJoinAllSpaces);
+  deskWindow.setCollectionBehavior(NSWindowCollectionBehaviorCanJoinAllSpaces); { follow Spaces, like the extra }
   deskWindow.setDelegate(self);
   deskView := TEyesDeskView.alloc.initWithFrame(NSMakeRect(0, 0, DeskPointsW, DeskPointsH));
   deskView.app := self;
   deskWindow.setContentView(deskView);
 
-  lastTick := NSDate.date.timeIntervalSinceReferenceDate;
+  lastTick := NSDate.date.timeIntervalSinceReferenceDate; { stamp now so first dt is not “since 2001” }
   animTimer := NSTimer.scheduledTimerWithTimeInterval_target_selector_userInfo_repeats(
     1.0 / 30.0, self, objcselector('tick:'), nil, True);
   animTimer.retain;
+  { Default mode pauses during menu tracking; common modes keep pupils moving. }
   NSRunLoop.currentRunLoop.addTimer_forMode(animTimer, NSRunLoopCommonModes);
   updateImages;
   syncDesktop;
@@ -245,12 +256,12 @@ var
   Dt: Double;
   Mouse: NSPoint;
 begin
-  Pool := NSAutoreleasePool.alloc.init;
+  Pool := NSAutoreleasePool.alloc.init; { 30 Hz NSImage allocs must not leak }
   Now := NSDate.date.timeIntervalSinceReferenceDate;
   Dt := Now - lastTick;
   lastTick := Now;
   Mouse := NSEvent.mouseLocation;
-  controller.Tick(Dt, Mouse.x, Mouse.y);
+  controller.Tick(Dt, Mouse.x, Mouse.y); { screen space → idle / blink }
   updateImages;
   Pool.release;
 end;
@@ -268,7 +279,7 @@ begin
     syncDesktop;
   end
   else
-    deskWindow.orderFrontRegardless;
+    deskWindow.orderFrontRegardless; { already showing: raise, do not hide }
 end;
 
 procedure TAppDelegate.aboutAction(sender: id);
@@ -286,7 +297,7 @@ function TAppDelegate.windowShouldClose(sender: id): ObjCBOOL;
 begin
   controller.ShowDesktop := False;
   deskWindow.orderOut(nil);
-  Result := False;
+  Result := False; { hide, do not destroy — the extra stays running }
 end;
 
 procedure TEyesDeskView.drawRect(dirtyRect: NSRect);
@@ -301,7 +312,7 @@ end;
 
 function TEyesDeskView.isFlipped: ObjCBOOL;
 begin
-  Result := True;
+  Result := True; { match the y-down pixel buffer }
 end;
 
 procedure HostRun;
@@ -311,10 +322,11 @@ var
 begin
   Pool := NSAutoreleasePool.alloc.init;
   App := NSApplication.sharedApplication;
+  { Accessory + Info.plist LSUIElement: menu extra only, no Dock / Cmd-Tab. }
   App.setActivationPolicy(NSApplicationActivationPolicyAccessory);
   SharedApp := TAppDelegate.alloc.init;
   App.setDelegate(SharedApp);
-  SharedApp.setup;
+  SharedApp.setup; { do not wait for didFinishLaunching; extras need the item early }
   App.run;
   Pool.release;
 end;

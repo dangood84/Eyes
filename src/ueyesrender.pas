@@ -2,6 +2,10 @@ unit ueyesrender;
 
 {$mode objfpc}{$H+}
 
+{ Software RGBA canvas. Hosts only upload the bytes; this unit does not know
+  about NSImage, HICON, or GdkPixbuf. A blink is a vertical squash of the
+  sclera (OpenRY), not a second sprite. }
+
 interface
 
 uses
@@ -24,6 +28,7 @@ type
 procedure RenderEyes(Buf: TPixelBuffer; const Pose: TEyesPose;
   Backdrop: Boolean);
 
+{ Windows DIB / HICON want BGRA; the canvas is RGBA. }
 procedure CopyBGRA(Buf: TPixelBuffer; Dest: PByte);
 
 implementation
@@ -92,9 +97,9 @@ begin
   N := Buf.Width * Buf.Height;
   for I := 0 to N - 1 do
   begin
-    D[0] := S[2];
+    D[0] := S[2]; { B }
     D[1] := S[1];
-    D[2] := S[0];
+    D[2] := S[0]; { R }
     D[3] := S[3];
     Inc(S, 4);
     Inc(D, 4);
@@ -102,6 +107,7 @@ begin
 end;
 
 procedure BlendPixel(P: PByte; R, G, B: Byte; A: Double);
+{ Straight-alpha src-over. Coverage from CoverEllipse is the source alpha. }
 var
   SA, DA, OutA, Inv: Double;
 begin
@@ -122,6 +128,7 @@ begin
 end;
 
 function CoverEllipse(PX, PY, CX, CY, RX, RY: Double): Double;
+{ 1 inside, 0 outside, a ~1 px ramp on the rim so 44-point extras are not jaggy. }
 var
   NX, NY, D, Edge: Double;
 begin
@@ -130,6 +137,8 @@ begin
   NX := (PX - CX) / RX;
   NY := (PY - CY) / RY;
   D := Sqrt(NX * NX + NY * NY);
+  { Distance in ellipse-space, scaled back to pixels so the AA width is even
+    on a stretched oval. }
   Edge := (D - 1.0) * Min(RX, RY);
   if Edge <= -0.6 then
     Result := 1
@@ -157,6 +166,7 @@ begin
     P := Buf.Ptr + (Y * W + X0) * 4;
     for X := X0 to X1 do
     begin
+      { Sample the pixel centre, not the integer corner. }
       Cov := CoverEllipse(X + 0.5, Y + 0.5, CX, CY, RX, RY);
       if Cov > 0 then
         BlendPixel(P, Col.R, Col.G, Col.B, Cov * Alpha);
@@ -184,6 +194,7 @@ begin
     P := Buf.Ptr + (Y * W + X0) * 4;
     for X := X0 to X1 do
     begin
+      { Pupil × sclera: the disc cannot spill into the lids. }
       Cov := CoverEllipse(X + 0.5, Y + 0.5, CX, CY, RX, RY) *
              CoverEllipse(X + 0.5, Y + 0.5, ClipCX, ClipCY, ClipRX, ClipRY);
       if Cov > 0 then
@@ -216,6 +227,8 @@ begin
     P := Buf.Ptr + (Y * W + X0) * 4;
     for X := X0 to X1 do
     begin
+      { Ring = outer disc minus inner disc. Filling black then “erasing” does
+        not work: BlendPixel with A=0 is a no-op. }
       Cov := CoverEllipse(X + 0.5, Y + 0.5, CX, CY, RX, RY) *
              (1.0 - CoverEllipse(X + 0.5, Y + 0.5, CX, CY, InnerX, InnerY));
       if Cov > 0 then
@@ -226,6 +239,7 @@ begin
 end;
 
 procedure DrawClosedLid(Buf: TPixelBuffer; CX, CY, RX, RY: Double);
+{ Sleep / full blink: a shallow sine arc, not a flat line. }
 var
   T, X, Y, Cov: Double;
   I, PX, PY, W: Integer;
@@ -261,10 +275,12 @@ begin
     Exit;
   end;
 
+  { Blink / drowsy: squash the white vertically around the centre. }
   OpenRY := RY * (0.16 + Lid * 0.84);
   Shade := 0.55 + 0.45 * Lid;
 
   FillEllipse(Buf, CX, CY + OpenRY * 0.08, RX, OpenRY, C(226, 222, 210), 1);
+  { Offset fill so the sclera reads as a sphere, not a sticker. }
   FillEllipse(Buf, CX - RX * 0.08, CY - OpenRY * 0.10, RX * 0.92, OpenRY * 0.88,
     C(252, 250, 245), 1);
 
@@ -296,9 +312,9 @@ procedure RenderEyes(Buf: TPixelBuffer; const Pose: TEyesPose; Backdrop: Boolean
 var
   Layout: TEyesLayout;
 begin
-  Buf.Clear(0, 0, 0, 0);
+  Buf.Clear(0, 0, 0, 0); { extra is transparent against the menu bar }
   if Backdrop then
-    DrawBackdrop(Buf);
+    DrawBackdrop(Buf);   { desktop window gets a platinum plate }
   Layout := MakeLayout(Buf.Width, Buf.Height);
   DrawEye(Buf, Layout.LeftCX, Layout.CY, Layout.RX, Layout.RY,
     Pose.Left.X, Pose.Left.Y, Layout.PupilR, Pose.LidOpen);

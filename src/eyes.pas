@@ -12,6 +12,7 @@ program Eyes;
   Windows:  notification-area icon plus a taskbar window.
   Linux:    panel / menu-bar status icon (GTK 2, Raspberry Pi OS friendly).
 
+  Only one HostRun is linked; the other two host units are not compiled.
   Build: see the Makefile. }
 
 uses
@@ -26,5 +27,5 @@ uses
   {$ENDIF};
 
 begin
-  HostRun;
+  HostRun; { Cocoa run loop, Win32 GetMessage, or gtk_main — see uhost*.pas }
 end.

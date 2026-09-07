@@ -20,8 +20,10 @@
   <string>1</string>
   <key>LSMinimumSystemVersion</key>
   <string>10.13</string>
+  <!-- Accessory: no Dock icon / Cmd-Tab. Matches NSApplicationActivationPolicyAccessory. -->
   <key>LSUIElement</key>
   <true/>
+  <!-- Retina: AppKit gives a 2× backing store; Pascal buffers use backingScaleFactor. -->
   <key>NSHighResolutionCapable</key>
   <true/>
   <key>NSPrincipalClass</key>
