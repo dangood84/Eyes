@@ -60,7 +60,6 @@ type
   public
     app: TAppDelegate;
     procedure drawRect(dirtyRect: NSRect); override;
-    function isFlipped: ObjCBOOL; override;
   end;
 
 var
@@ -306,13 +305,10 @@ begin
   NSRectFill(self.bounds);
   if (app = nil) or (app.deskImage = nil) then
     Exit;
+  { Same unflipped draw as the status item. isFlipped + this older drawInRect
+    stood the pair on its head (highlights under the pupils). }
   app.deskImage.drawInRect_fromRect_operation_fraction(self.bounds, NSZeroRect,
     NSCompositeSourceOver, 1.0);
-end;
-
-function TEyesDeskView.isFlipped: ObjCBOOL;
-begin
-  Result := True; { match the y-down pixel buffer }
 end;
 
 procedure HostRun;

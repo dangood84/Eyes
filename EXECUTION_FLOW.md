@@ -76,7 +76,7 @@ statusItem.button.setImagePosition(NSImageOnly);
 
 No title string — the extra is only the painted pair.
 
-**9.** Desktop window: titled, closable, `NSStatusWindowLevel`, opaque platinum background, top-right of `visibleFrame`. Content view is `TEyesDeskView` (`isFlipped = True` so buffer y=0 is the top). `windowShouldClose` hides rather than destroys.
+**9.** Desktop window: titled, closable, `NSStatusWindowLevel`, opaque platinum background, top-right of `visibleFrame`. Content view is `TEyesDeskView` (unflipped, same as the status item, so the y-down buffer is not drawn upside down). `windowShouldClose` hides rather than destroys.
 
 **10.** Timer is armed; **first** `updateImages` + `syncDesktop` run **before** `App.run` so the extra is not blank for a frame.
 
