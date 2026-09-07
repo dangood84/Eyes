@@ -63,7 +63,7 @@ Linux: `gtk_init`, `gtk_status_icon_new`, `g_timeout_add(33, ...)`, `gtk_main`.
 - `Bar` / `Desk` `TPixelBuffer`s allocated (RGBA, zeroed later by `Clear`)
 - `ShowDesktop := True` on the Cocoa host so the floating window is offered immediately
 
-**7.** Menu items target the delegate: `toggleDesktopAction:`, `aboutAction:`, `quitAction:`.
+**7.** Menu items target the delegate: `toggleDesktopAction:`, `aboutAction:`, `quitAction:`. Show Desktop Eyes is **⌘⇧E** via a Carbon hotkey (an accessory extra has no key window once the pair is hidden, so a menu-item equivalent only beeps). The desk window swallows the same chord so AppKit does not plonk. Windows / Linux use **Ctrl+Shift+E** on the focused desktop window.
 
 **8.** Status item:
 

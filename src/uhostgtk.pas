@@ -101,7 +101,7 @@ var
   Menu, Item: PGtkWidget;
 begin
   Menu := gtk_menu_new;
-  Item := gtk_menu_item_new_with_label('Desktop Eyes');
+  Item := gtk_menu_item_new_with_label('Desktop Eyes    Ctrl+Shift+E');
   g_signal_connect(G_OBJECT(Item), 'activate', TG_SIGNAL_FUNC(@OnToggleDesktop), nil);
   gtk_menu_shell_append(PGtkMenuShell(Menu), Item);
   Item := gtk_separator_menu_item_new;
@@ -134,6 +134,25 @@ begin
   Controller.ShowDesktop := False;
   gtk_widget_hide(Widget);
   Result := True; { stop GTK destroying the window so we can show it again }
+end;
+
+function OnDeskKey(Widget: PGtkWidget; Event: PGdkEvent; Data: gpointer): gboolean; cdecl;
+const
+  KeyE = $065;
+  KeyShiftE = $045;
+var
+  Mods: guint;
+begin
+  Result := False;
+  if Event = nil then
+    Exit;
+  Mods := Event^.key.state and (GDK_CONTROL_MASK or GDK_SHIFT_MASK or GDK_MOD1_MASK);
+  if ((Event^.key.keyval = KeyE) or (Event^.key.keyval = KeyShiftE)) and
+     (Mods = (GDK_CONTROL_MASK or GDK_SHIFT_MASK)) then
+  begin
+    OnToggleDesktop(Widget, Data);
+    Result := True;
+  end;
 end;
 
 function OnTick(Data: gpointer): gboolean; cdecl;
@@ -213,6 +232,7 @@ begin
   DeskImage := gtk_image_new;
   gtk_container_add(PGtkContainer(DeskWin), DeskImage);
   g_signal_connect(G_OBJECT(DeskWin), 'delete-event', TG_SIGNAL_FUNC(@OnDeskDelete), nil);
+  g_signal_connect(G_OBJECT(DeskWin), 'key-press-event', TG_SIGNAL_FUNC(@OnDeskKey), nil);
 
   g_timeout_add(33, TGSourceFunc(@OnTick), nil); { ~30 FPS, GUI thread }
   OnTick(nil); { first frame before gtk_main so the icon is not blank }

@@ -2,6 +2,7 @@ unit uhostcocoa;
 
 {$mode objfpc}{$H+}
 {$modeswitch objectivec1}
+{$linkframework Carbon}
 
 { macOS menu extra. Accessory policy + LSUIElement = no Dock icon.
   The pair is an NSStatusItem image, refreshed ~30 Hz from the Pascal canvas. }
@@ -23,6 +24,19 @@ const
 
 type
   TEyesDeskView = objcclass;
+  TEyesDeskWindow = objcclass;
+  EventHotKeyRef = Pointer;
+  EventHandlerRef = Pointer;
+  EventTargetRef = Pointer;
+  EventHandlerCallRef = Pointer;
+  EventRef = Pointer;
+  EventHotKeyID = record
+    signature, id: UInt32;
+  end;
+  EventTypeSpec = record
+    eventClass, eventKind: UInt32;
+  end;
+  OSStatus = LongInt;
 
   NSBitmapImageRepEyes = objccategory external (NSBitmapImageRep)
     { FPC truncates the real method name past 127 chars; this category keeps
@@ -37,7 +51,7 @@ type
   public
     controller: TEyesController;
     statusItem: NSStatusItem;
-    deskWindow: NSWindow;
+    deskWindow: TEyesDeskWindow;
     deskView: TEyesDeskView;
     barImage: NSImage;
     deskImage: NSImage;
@@ -54,21 +68,78 @@ type
     procedure syncDesktop; message 'syncDesktop';
     procedure updateImages; message 'updateImages';
     procedure setup; message 'setup';
+    procedure handleDesktopShortcut; message 'handleDesktopShortcut';
+  end;
+
+  TEyesDeskWindow = objcclass(NSWindow)
+  public
+    app: TAppDelegate;
+    function canBecomeKeyWindow: ObjCBOOL; override;
+    function performKeyEquivalent(event: NSEvent): ObjCBOOL; override;
   end;
 
   TEyesDeskView = objcclass(NSView)
   public
     app: TAppDelegate;
     procedure drawRect(dirtyRect: NSRect); override;
+    function acceptsFirstResponder: ObjCBOOL; override;
   end;
+
+const
+  kEventClassKeyboard = $6B657962; { 'keyb' }
+  kEventHotKeyPressed = 5;
+  CarbonCmdKey = 1 shl 8;
+  CarbonShiftKey = 1 shl 9;
+  kVK_ANSI_E = $0E;
+
+function GetApplicationEventTarget: EventTargetRef; cdecl; external;
+function RegisterEventHotKey(inHotKeyCode: UInt32; inHotKeyModifiers: UInt32;
+  inHotKeyID: EventHotKeyID; inTarget: EventTargetRef; inOptions: UInt32;
+  var outRef: EventHotKeyRef): OSStatus; cdecl; external;
+function InstallEventHandler(inTarget: EventTargetRef; inHandler: Pointer;
+  inNumTypes: UInt32; inList: Pointer; inUserData: Pointer;
+  var outRef: EventHandlerRef): OSStatus; cdecl; external;
 
 var
   SharedApp: TAppDelegate;
+  DeskHotKey: EventHotKeyRef;
+  DeskHotHandler: EventHandlerRef;
 
 function NSStr(const S: string): NSString;
 begin
   Result := NSString.stringWithUTF8String(PChar(S));
 end;
+
+function IsDesktopShortcut(Event: NSEvent): Boolean;
+var
+  Chars: NSString;
+  Mods: NSUInteger;
+  Ch: unichar;
+begin
+  Result := False;
+  if Event = nil then
+    Exit;
+  Chars := Event.charactersIgnoringModifiers;
+  if (Chars = nil) or (Chars.length <> 1) then
+    Exit;
+  Ch := Chars.characterAtIndex(0);
+  if (Ch <> Ord('e')) and (Ch <> Ord('E')) then
+    Exit;
+  Mods := Event.modifierFlags;
+  Result := (Mods and NSCommandKeyMask <> 0) and (Mods and NSShiftKeyMask <> 0);
+end;
+
+function HotKeyHandler(nextHandler: EventHandlerCallRef; theEvent: EventRef;
+  userData: Pointer): OSStatus; cdecl;
+begin
+  { Carbon delivers this even when we are an accessory and have no key window.
+    That is how ⌘⇧E can show the pair after it has been hidden. }
+  if SharedApp <> nil then
+    SharedApp.handleDesktopShortcut;
+  Result := 0;
+end;
+
+procedure RegisterDesktopHotKey; forward;
 
 function MakeImage(Pixels: PByte; PixelW, PixelH: Integer; PointW, PointH: Double): NSImage;
 var
@@ -153,10 +224,17 @@ procedure TAppDelegate.syncDesktop;
 begin
   if deskWindow = nil then
     Exit;
-  deskWindow.setLevel(NSStatusWindowLevel);
+  deskWindow.setLevel(NSFloatingWindowLevel);
   deskWindow.setHidesOnDeactivate(False);
   if controller.ShowDesktop then
-    deskWindow.orderFrontRegardless { accessory apps are never “active” }
+  begin
+    { Accessory apps stay inactive unless we insist; otherwise the window
+      never becomes key and ⌘⇧E never reaches performKeyEquivalent. }
+    NSApplication.sharedApplication.activateIgnoringOtherApps(True);
+    deskWindow.makeKeyAndOrderFront(nil);
+    if deskView <> nil then
+      deskWindow.makeFirstResponder(deskView);
+  end
   else
     deskWindow.orderOut(nil);
 end;
@@ -187,7 +265,9 @@ begin
   controller.ShowDesktop := True;
 
   Menu := NSMenu.alloc.init;
-  Item := NSMenuItem.alloc.initWithTitle_action_keyEquivalent(NSStr('Show Desktop Eyes'), objcselector('toggleDesktopAction:'), NSStr('d'));
+  { Title shows ⇧⌘E; we do not setKeyEquivalent — that is what produced the plonk. }
+  Item := NSMenuItem.alloc.initWithTitle_action_keyEquivalent(
+    NSStr('Show Desktop Eyes    ⇧⌘E'), objcselector('toggleDesktopAction:'), NSStr(''));
   Item.setTarget(self);
   Menu.addItem(Item);
   Item.release;
@@ -218,10 +298,11 @@ begin
       Vis.origin.y + Vis.size.height - DeskPointsH - 28,
       DeskPointsW, DeskPointsH);
   end;
-  deskWindow := NSWindow.alloc.initWithContentRect_styleMask_backing_defer(
+  deskWindow := TEyesDeskWindow.alloc.initWithContentRect_styleMask_backing_defer(
     Vis, Style, NSBackingStoreBuffered, False);
+  deskWindow.app := self;
   deskWindow.setTitle(NSStr('Eyes'));
-  deskWindow.setLevel(NSStatusWindowLevel);
+  deskWindow.setLevel(NSFloatingWindowLevel); { status level often refuses to become key }
   deskWindow.setReleasedWhenClosed(False); { close box hides; we reuse this window }
   deskWindow.setHidesOnDeactivate(False);
   deskWindow.setOpaque(True);
@@ -238,6 +319,10 @@ begin
   animTimer.retain;
   { Default mode pauses during menu tracking; common modes keep pupils moving. }
   NSRunLoop.currentRunLoop.addTimer_forMode(animTimer, NSRunLoopCommonModes);
+
+  { Global hotkey: accessory extras have no key window once the pair is hidden. }
+  RegisterDesktopHotKey;
+
   updateImages;
   syncDesktop;
 end;
@@ -272,13 +357,23 @@ end;
 
 procedure TAppDelegate.toggleDesktopAction(sender: id);
 begin
+  { Menu click: show or raise. The shortcut (handleDesktopShortcut) toggles. }
   if (not controller.ShowDesktop) or (deskWindow = nil) or (not deskWindow.isVisible) then
   begin
     controller.ShowDesktop := True;
     syncDesktop;
   end
   else
-    deskWindow.orderFrontRegardless; { already showing: raise, do not hide }
+    deskWindow.makeKeyAndOrderFront(nil);
+end;
+
+procedure TAppDelegate.handleDesktopShortcut;
+begin
+  if controller.ShowDesktop and (deskWindow <> nil) and deskWindow.isVisible then
+    controller.ShowDesktop := False
+  else
+    controller.ShowDesktop := True;
+  syncDesktop;
 end;
 
 procedure TAppDelegate.aboutAction(sender: id);
@@ -309,6 +404,37 @@ begin
     stood the pair on its head (highlights under the pupils). }
   app.deskImage.drawInRect_fromRect_operation_fraction(self.bounds, NSZeroRect,
     NSCompositeSourceOver, 1.0);
+end;
+
+function TEyesDeskView.acceptsFirstResponder: ObjCBOOL;
+begin
+  Result := True;
+end;
+
+function TEyesDeskWindow.canBecomeKeyWindow: ObjCBOOL;
+begin
+  Result := True;
+end;
+
+function TEyesDeskWindow.performKeyEquivalent(event: NSEvent): ObjCBOOL;
+begin
+  { Swallow ⌘⇧E while we are key so AppKit does not beep. The Carbon hotkey
+    is what toggles — doing it here as well would hide-then-show in one press. }
+  Result := IsDesktopShortcut(event);
+end;
+
+procedure RegisterDesktopHotKey;
+var
+  Spec: EventTypeSpec;
+  HotID: EventHotKeyID;
+begin
+  Spec.eventClass := kEventClassKeyboard;
+  Spec.eventKind := kEventHotKeyPressed;
+  InstallEventHandler(GetApplicationEventTarget, @HotKeyHandler, 1, @Spec, nil, DeskHotHandler);
+  HotID.signature := $45594553; { 'EYES' }
+  HotID.id := 1;
+  RegisterEventHotKey(kVK_ANSI_E, CarbonCmdKey or CarbonShiftKey, HotID,
+    GetApplicationEventTarget, 0, DeskHotKey);
 end;
 
 procedure HostRun;

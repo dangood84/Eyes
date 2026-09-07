@@ -68,7 +68,7 @@ Only one `HostRun` is linked. The other two host units are not compiled on that 
 4. **`setup`** (also called again from `applicationDidFinishLaunching`, but it is idempotent via `ready`):
    - reads `backingScaleFactor` (usually 2 on retina)
    - `TEyesController.Create` with bar `44×22` points and desk `240×120` points, scaled to pixels
-   - builds the status-item menu (Show Desktop Eyes / About / Quit)
+   - builds the status-item menu (Show Desktop Eyes ⌘⇧E / About / Quit)
    - `NSStatusBar.statusItemWithLength(44)` and `setImagePosition(NSImageOnly)`
    - creates the floating `NSWindow` at the top-right of `visibleFrame`
    - starts `NSTimer` at `1/30` s → `tick:`

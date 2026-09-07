@@ -119,7 +119,7 @@ var
   Pt: TPoint;
 begin
   Menu := CreatePopupMenu;
-  AppendMenu(Menu, MF_STRING, CmdDesktop, PChar('Desktop Eyes'));
+  AppendMenu(Menu, MF_STRING, CmdDesktop, PChar('Desktop Eyes'#9'Ctrl+Shift+E'));
   AppendMenu(Menu, MF_SEPARATOR, 0, nil);
   AppendMenu(Menu, MF_STRING, CmdAbout, PChar('About Eyes'));
   AppendMenu(Menu, MF_SEPARATOR, 0, nil);
@@ -204,6 +204,13 @@ begin
       TickFrame(Wnd);
     WM_PAINT:
       PaintDesk(Wnd);
+    WM_KEYDOWN:
+      { Accelerator table is the real path; this catches the same chord if focus is here. }
+      if (WParam = Ord('E')) and (GetKeyState(VK_CONTROL) < 0) and (GetKeyState(VK_SHIFT) < 0) then
+      begin
+        Controller.ToggleDesktop;
+        SyncDesktop(Wnd);
+      end;
     WM_COMMAND:
       case LOWORD(WParam) of
         CmdDesktop:
@@ -250,6 +257,8 @@ var
   WC: WNDCLASS;
   Msg: TMsg;
   ScreenW, ScreenH: Integer;
+  Accel: ACCEL;
+  AccelTable: HACCEL;
 begin
   Controller := TEyesController.Create(BarW, BarH, DeskW * 2, DeskH * 2);
   Controller.ShowDesktop := True; { Windows: window is how they appear on the taskbar }
@@ -284,11 +293,22 @@ begin
   ShowWindow(MainWnd, SW_SHOW);
   UpdateWindow(MainWnd);
 
+  FillChar(Accel, SizeOf(Accel), 0);
+  Accel.fVirt := FCONTROL or FSHIFT or FVIRTKEY;
+  Accel.key := Ord('E');
+  Accel.cmd := CmdDesktop;
+  AccelTable := CreateAcceleratorTable(@Accel, 1);
+
   while GetMessage(Msg, 0, 0, 0) do
   begin
-    TranslateMessage(Msg);
-    DispatchMessage(Msg);
+    if (AccelTable = 0) or (TranslateAccelerator(MainWnd, AccelTable, Msg) = 0) then
+    begin
+      TranslateMessage(Msg);
+      DispatchMessage(Msg);
+    end;
   end;
+  if AccelTable <> 0 then
+    DestroyAcceleratorTable(AccelTable);
   Controller.Free;
 end;
 

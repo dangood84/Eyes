@@ -62,7 +62,7 @@ open build/Eyes.app
 1. Move the mouse. Both pupils track it.
 2. Hover between the two eyes (or park the pointer on the menu extra itself). They go cross-eyed.
 3. Leave the mouse still for about 14 seconds to see a drowsy squint, or about 26 seconds to see them sleep.
-4. Click the menu-bar eyes for **Show Desktop Eyes**, **About Eyes**, and **Quit Eyes**.
+4. Click the menu-bar eyes for **Show Desktop Eyes**, **About Eyes**, and **Quit Eyes**. **⌘⇧E** (macOS) shows or hides the desktop pair even after they are tucked away. On Windows / Linux, **Ctrl+Shift+E** does the same while that window is focused.
 5. Close the desktop window to tuck the large pair away. The menu-bar pair stays put.
 
 ## Where they appear
