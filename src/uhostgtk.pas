@@ -3,7 +3,8 @@ unit uhostgtk;
 {$mode objfpc}{$H+}
 
 { Linux panel extra (GtkStatusIcon) + optional window. Same TEyesController;
-  FPC's gtk2 unit often omits status-icon symbols, so they are cdecl externals. }
+  FPC's gtk2 unit often omits status-icon symbols, so they are cdecl externals.
+  Bindings use TGCallback / G_CALLBACK, not the C names GTimeVal / GTK_SIGNAL_FUNC. }
 
 interface
 
@@ -40,7 +41,7 @@ var
   DeskWin: PGtkWidget;
   DeskImage: PGtkWidget;
   BarPix, DeskPix: PGdkPixbuf;
-  LastTick: GTimeVal;
+  LastTick: QWord;
   HaveTick: Boolean;
 
 procedure PixbufFromBuffer(Pix: PGdkPixbuf; Buf: TPixelBuffer);
@@ -102,17 +103,17 @@ var
 begin
   Menu := gtk_menu_new;
   Item := gtk_menu_item_new_with_label('Desktop Eyes    Ctrl+Shift+E');
-  g_signal_connect(G_OBJECT(Item), 'activate', TG_SIGNAL_FUNC(@OnToggleDesktop), nil);
+  g_signal_connect(G_OBJECT(Item), 'activate', G_CALLBACK(@OnToggleDesktop), nil);
   gtk_menu_shell_append(PGtkMenuShell(Menu), Item);
   Item := gtk_separator_menu_item_new;
   gtk_menu_shell_append(PGtkMenuShell(Menu), Item);
   Item := gtk_menu_item_new_with_label('About Eyes');
-  g_signal_connect(G_OBJECT(Item), 'activate', TG_SIGNAL_FUNC(@OnAbout), nil);
+  g_signal_connect(G_OBJECT(Item), 'activate', G_CALLBACK(@OnAbout), nil);
   gtk_menu_shell_append(PGtkMenuShell(Menu), Item);
   Item := gtk_separator_menu_item_new;
   gtk_menu_shell_append(PGtkMenuShell(Menu), Item);
   Item := gtk_menu_item_new_with_label('Quit Eyes');
-  g_signal_connect(G_OBJECT(Item), 'activate', TG_SIGNAL_FUNC(@OnQuit), nil);
+  g_signal_connect(G_OBJECT(Item), 'activate', G_CALLBACK(@OnQuit), nil);
   gtk_menu_shell_append(PGtkMenuShell(Menu), Item);
   gtk_widget_show_all(Menu);
   gtk_menu_popup(PGtkMenu(Menu), nil, nil, nil, nil, Button, ActivateTime);
@@ -129,7 +130,7 @@ begin
   SyncDesktop;
 end;
 
-procedure OnDeskDelete(Widget: PGtkWidget; Event: PGdkEvent; Data: gpointer): gboolean; cdecl;
+function OnDeskDelete(Widget: PGtkWidget; Event: PGdkEvent; Data: gpointer): gboolean; cdecl;
 begin
   Controller.ShowDesktop := False;
   gtk_widget_hide(Widget);
@@ -157,7 +158,7 @@ end;
 
 function OnTick(Data: gpointer): gboolean; cdecl;
 var
-  Now: GTimeVal;
+  NowTick: QWord;
   Dt: Double;
   MX, MY: gint;
   Area: TGdkRectangle;
@@ -166,16 +167,16 @@ var
   Win: PGdkWindow;
   OX, OY: gint;
 begin
-  g_get_current_time(@Now);
+  NowTick := GetTickCount64;
   if not HaveTick then
   begin
-    LastTick := Now; { first tick only stamps time so dt is not “since process start” }
+    LastTick := NowTick; { first tick only stamps time so dt is not “since process start” }
     HaveTick := True;
     Dt := 1 / 30;
   end
   else
-    Dt := (Now.tv_sec - LastTick.tv_sec) + (Now.tv_usec - LastTick.tv_usec) / 1000000.0;
-  LastTick := Now;
+    Dt := (NowTick - LastTick) / 1000.0;
+  LastTick := NowTick;
 
   gdk_display_get_pointer(gdk_display_get_default, nil, @MX, @MY, nil); { may fail on Wayland }
   Controller.Tick(Dt, MX, MY);
@@ -221,8 +222,8 @@ begin
   StatusIcon := gtk_status_icon_new;
   gtk_status_icon_set_tooltip_text(StatusIcon, 'Eyes');
   gtk_status_icon_set_visible(StatusIcon, True);
-  g_signal_connect(G_OBJECT(StatusIcon), 'popup-menu', TG_SIGNAL_FUNC(@OnStatusPopup), nil);
-  g_signal_connect(G_OBJECT(StatusIcon), 'activate', TG_SIGNAL_FUNC(@OnStatusActivate), nil);
+  g_signal_connect(G_OBJECT(StatusIcon), 'popup-menu', G_CALLBACK(@OnStatusPopup), nil);
+  g_signal_connect(G_OBJECT(StatusIcon), 'activate', G_CALLBACK(@OnStatusActivate), nil);
 
   DeskWin := gtk_window_new(GTK_WINDOW_TOPLEVEL);
   gtk_window_set_title(PGtkWindow(DeskWin), 'Eyes');
@@ -231,8 +232,8 @@ begin
   gtk_window_set_skip_taskbar_hint(PGtkWindow(DeskWin), False); { appear on the panel task list }
   DeskImage := gtk_image_new;
   gtk_container_add(PGtkContainer(DeskWin), DeskImage);
-  g_signal_connect(G_OBJECT(DeskWin), 'delete-event', TG_SIGNAL_FUNC(@OnDeskDelete), nil);
-  g_signal_connect(G_OBJECT(DeskWin), 'key-press-event', TG_SIGNAL_FUNC(@OnDeskKey), nil);
+  g_signal_connect(G_OBJECT(DeskWin), 'delete-event', G_CALLBACK(@OnDeskDelete), nil);
+  g_signal_connect(G_OBJECT(DeskWin), 'key-press-event', G_CALLBACK(@OnDeskKey), nil);
 
   g_timeout_add(33, TGSourceFunc(@OnTick), nil); { ~30 FPS, GUI thread }
   OnTick(nil); { first frame before gtk_main so the icon is not blank }
