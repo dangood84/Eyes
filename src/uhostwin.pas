@@ -31,7 +31,7 @@ const
 var
   Controller: TEyesController;
   MainWnd: HWND;
-  TrayIcon: NOTIFYICONDATA;
+  TrayIcon: TNotifyIconDataA; { A-struct so Shell_NotifyIconA is unambiguous }
   LastTick: QWord;
   BgraBar: array of Byte;
   BgraDesk: array of Byte;
@@ -172,7 +172,7 @@ begin
     if TrayIcon.hIcon <> 0 then
       DestroyIcon(TrayIcon.hIcon);
     TrayIcon.hIcon := Icon;
-    Shell_NotifyIcon(NIM_MODIFY, @TrayIcon); { replacing the HICON is what animates the tray }
+    Shell_NotifyIconA(NIM_MODIFY, @TrayIcon); { replacing the HICON is what animates the tray }
   end;
 
   if Controller.ShowDesktop then
@@ -242,7 +242,7 @@ begin
     WM_DESTROY:
       begin
         KillTimer(Wnd, 1);
-        Shell_NotifyIcon(NIM_DELETE, @TrayIcon);
+        Shell_NotifyIconA(NIM_DELETE, @TrayIcon);
         if TrayIcon.hIcon <> 0 then
           DestroyIcon(TrayIcon.hIcon);
         PostQuitMessage(0);
@@ -257,7 +257,7 @@ var
   WC: WNDCLASS;
   Msg: TMsg;
   ScreenW, ScreenH: Integer;
-  Accel: ACCEL;
+  HotAccel: TACCEL; { not Accel: ACCEL — Pascal identifiers are case-blind }
   AccelTable: HACCEL;
 begin
   Controller := TEyesController.Create(BarW, BarH, DeskW * 2, DeskH * 2);
@@ -281,23 +281,23 @@ begin
 
   FillChar(TrayIcon, SizeOf(TrayIcon), 0);
   TrayIcon.cbSize := SizeOf(TrayIcon);
-  TrayIcon.Wnd := MainWnd;
+  TrayIcon.hWnd := MainWnd; { FPC's NOTIFYICONDATA, not Delphi's Wnd }
   TrayIcon.uID := IdTray;
   TrayIcon.uFlags := NIF_MESSAGE or NIF_ICON or NIF_TIP;
   TrayIcon.uCallbackMessage := WmTray;
   TrayIcon.hIcon := LoadIcon(0, IDI_APPLICATION);
-  lstrcpyn(TrayIcon.szTip, 'Eyes', 128);
-  Shell_NotifyIcon(NIM_ADD, @TrayIcon);
+  lstrcpynA(@TrayIcon.szTip[0], 'Eyes', 128);
+  Shell_NotifyIconA(NIM_ADD, @TrayIcon);
 
   SyncDesktop(MainWnd);
   ShowWindow(MainWnd, SW_SHOW);
   UpdateWindow(MainWnd);
 
-  FillChar(Accel, SizeOf(Accel), 0);
-  Accel.fVirt := FCONTROL or FSHIFT or FVIRTKEY;
-  Accel.key := Ord('E');
-  Accel.cmd := CmdDesktop;
-  AccelTable := CreateAcceleratorTable(@Accel, 1);
+  FillChar(HotAccel, SizeOf(HotAccel), 0);
+  HotAccel.fVirt := FCONTROL or FSHIFT or FVIRTKEY;
+  HotAccel.key := Ord('E');
+  HotAccel.cmd := CmdDesktop;
+  AccelTable := CreateAcceleratorTable(@HotAccel, 1);
 
   while GetMessage(Msg, 0, 0, 0) do
   begin
