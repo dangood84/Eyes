@@ -63,14 +63,14 @@ open build/Eyes.app
 2. Hover between the two eyes (or park the pointer on the menu extra itself). They go cross-eyed.
 3. Leave the mouse still for about 14 seconds to see a drowsy squint, or about 26 seconds to see them sleep.
 4. Click the menu-bar eyes for **Show Desktop Eyes**, **About Eyes**, and **Quit Eyes**. **⌘⇧E** (macOS) shows or hides the desktop pair even after they are tucked away. On Windows / Linux, **Ctrl+Shift+E** does the same while that window is focused.
-5. Close the desktop window to tuck the large pair away. The menu-bar pair stays put. On Windows the small pair is the **taskbar** button (not the Hidden-icons overflow); closing the window minimises it so that button remains.
+5. Close the desktop window to tuck the large pair away. The menu-bar / tray pair stays put. On Windows, click the extra or **Ctrl+Shift+E** (while the window last had focus) to bring the large pair back. If the small pair slides under the notification chevron, open Hidden icons and choose **Show icon and notifications**.
 
 ## Where they appear
 
 | OS | Presence |
 |----|----------|
 | **macOS** | Menu bar extra (right-hand extras). Optional floating desktop window. |
-| **Windows** | Taskbar button (the small pair) **and** an optional always-on-top desktop window. |
+| **Windows** | Notification-area extra (same idea as the Mac / Linux menu bar). Optional always-on-top desktop window. |
 | **Linux** | GTK 2 status icon on the panel / menu bar (Raspberry Pi OS friendly), plus an optional desktop window. |
 
 ## Project layout
