@@ -2,8 +2,10 @@ unit uhostwin;
 
 {$mode objfpc}{$H+}
 
-{ Windows tray icon + taskbar window. Same TEyesController as macOS;
-  this unit only presents pixels (BGRA HICON + StretchDIBits). }
+{ Windows taskbar extra + optional desktop window. Same TEyesController as
+  macOS; this unit only presents pixels (BGRA HICON + StretchDIBits).
+  The small pair is the window icon (always on the taskbar). A notify-area
+  icon would sit under Windows 11 “Hidden icons”. }
 
 interface
 
@@ -14,12 +16,10 @@ implementation
 {$IFDEF WINDOWS}
 
 uses
-  Windows, Messages, ShellAPI, SysUtils, ueyesmodel, ueyesrender, ueyesapp;
+  Windows, Messages, SysUtils, ueyesmodel, ueyesrender, ueyesapp;
 
 const
   AppName = 'EyesClassicPtr';
-  WmTray = WM_APP + 42; { not a system message; tray callback lands here }
-  IdTray = 1;
   CmdDesktop = 1001;
   CmdAbout = 1002;
   CmdQuit = 1003;
@@ -27,11 +27,12 @@ const
   BarH = 32;
   DeskW = 240;
   DeskH = 120;
+  DeskBack = (218 shl 16) or (228 shl 8) or 232; { platinum, same as RenderEyes }
 
 var
   Controller: TEyesController;
   MainWnd: HWND;
-  TrayIcon: TNotifyIconDataA; { A-struct so Shell_NotifyIconA is unambiguous }
+  TaskIcon: HICON;
   LastTick: QWord;
   BgraBar: array of Byte;
   BgraDesk: array of Byte;
@@ -54,6 +55,8 @@ var
   Mask: HBITMAP;
   IconInfo: TIconInfo;
   Bgra: array of Byte;
+  MaskBits: array of Byte;
+  RowBytes, X, Y, Alpha: Integer;
 begin
   Result := 0;
   FillChar(Info, SizeOf(Info), 0);
@@ -65,15 +68,28 @@ begin
   Info.bmiHeader.biCompression := BI_RGB;
   SetLength(Bgra, Buf.Width * Buf.Height * 4);
   CopyBGRA(Buf, @Bgra[0]);
+  { 1-bit AND mask from alpha, or the extra is a black tile on the taskbar. }
+  RowBytes := ((Buf.Width + 15) div 16) * 2;
+  SetLength(MaskBits, RowBytes * Buf.Height);
+  if Length(MaskBits) > 0 then
+    FillChar(MaskBits[0], Length(MaskBits), 0);
+  for Y := 0 to Buf.Height - 1 do
+    for X := 0 to Buf.Width - 1 do
+    begin
+      Alpha := Buf.Ptr[(Y * Buf.Width + X) * 4 + 3];
+      if Alpha < 16 then
+        MaskBits[Y * RowBytes + X div 8] :=
+          MaskBits[Y * RowBytes + X div 8] or Byte($80 shr (X and 7));
+    end;
   DC := GetDC(0);
   Bits := nil;
   Dib := CreateDIBSection(DC, Info, DIB_RGB_COLORS, Bits, 0, 0);
   if (Dib <> 0) and (Bits <> nil) then
     Move(Bgra[0], Bits^, Length(Bgra));
-  Mask := CreateBitmap(Buf.Width, Buf.Height, 1, 1, nil);
+  Mask := CreateBitmap(Buf.Width, Buf.Height, 1, 1, @MaskBits[0]);
   FillChar(IconInfo, SizeOf(IconInfo), 0);
   IconInfo.fIcon := True;
-  IconInfo.hbmMask := Mask; { 1-bit mask required even for a 32-bit colour icon }
+  IconInfo.hbmMask := Mask;
   IconInfo.hbmColor := Dib;
   Result := CreateIconIndirect(IconInfo);
   if Dib <> 0 then
@@ -83,21 +99,39 @@ begin
   ReleaseDC(0, DC);
 end;
 
+procedure ApplyTaskIcon(Wnd: HWND; Icon: HICON);
+var
+  Prev: HICON;
+begin
+  if Icon = 0 then
+    Exit;
+  Prev := TaskIcon;
+  SendMessage(Wnd, WM_SETICON, ICON_SMALL, LPARAM(Icon));
+  SendMessage(Wnd, WM_SETICON, ICON_BIG, LPARAM(Icon));
+  TaskIcon := Icon;
+  if (Prev <> 0) and (Prev <> Icon) then
+    DestroyIcon(Prev);
+end;
+
 procedure PaintDesk(Wnd: HWND);
 var
   PS: PAINTSTRUCT;
   DC: HDC;
   Info: BITMAPINFO;
   R: TRect;
+  Brush: HBRUSH;
 begin
   DC := BeginPaint(Wnd, @PS);
   GetClientRect(Wnd, @R);
+  Brush := CreateSolidBrush(DeskBack);
+  FillRect(DC, R, Brush);
+  DeleteObject(Brush);
   if Length(BgraDesk) = Controller.Desk.Width * Controller.Desk.Height * 4 then
   begin
     FillChar(Info, SizeOf(Info), 0);
     Info.bmiHeader.biSize := SizeOf(BITMAPINFOHEADER);
     Info.bmiHeader.biWidth := Controller.Desk.Width;
-    Info.bmiHeader.biHeight := -Controller.Desk.Height; { same top-down DIB as the tray icon }
+    Info.bmiHeader.biHeight := -Controller.Desk.Height; { same top-down DIB as the icon }
     Info.bmiHeader.biPlanes := 1;
     Info.bmiHeader.biBitCount := 32;
     Info.bmiHeader.biCompression := BI_RGB;
@@ -134,12 +168,12 @@ procedure SyncDesktop(Wnd: HWND);
 begin
   if Controller.ShowDesktop then
   begin
-    ShowWindow(Wnd, SW_SHOW);
+    ShowWindow(Wnd, SW_RESTORE); { hide was SW_HIDE, which drops the taskbar button }
     SetWindowPos(Wnd, HWND_TOPMOST, 0, 0, 0, 0,
-      SWP_NOMOVE or SWP_NOSIZE or SWP_NOACTIVATE); { keep the taskbar button }
+      SWP_NOMOVE or SWP_NOSIZE or SWP_NOACTIVATE);
   end
   else
-    ShowWindow(Wnd, SW_HIDE);
+    ShowWindow(Wnd, SW_MINIMIZE); { button stays; that is the Windows extra }
 end;
 
 procedure TickFrame(Wnd: HWND);
@@ -157,7 +191,7 @@ begin
   Mouse := MousePos;
   Controller.Tick(Dt, Mouse.X, Mouse.Y);
 
-  { Tray icons have no reliable geometry API here; aim against the virtual screen. }
+  { Taskbar buttons have no geometry API here; aim against the virtual screen. }
   Controller.RenderBar(
     MouseToCanvas(Mouse.X, Mouse.Y, 0, 0, GetSystemMetrics(SM_CXSCREEN), GetSystemMetrics(SM_CYSCREEN),
       Controller.Bar.Width, Controller.Bar.Height, False).X,
@@ -167,13 +201,7 @@ begin
   SetLength(BgraBar, Controller.Bar.Width * Controller.Bar.Height * 4);
   CopyBGRA(Controller.Bar, @BgraBar[0]);
   Icon := CreateIconFromBuffer(Controller.Bar);
-  if Icon <> 0 then
-  begin
-    if TrayIcon.hIcon <> 0 then
-      DestroyIcon(TrayIcon.hIcon);
-    TrayIcon.hIcon := Icon;
-    Shell_NotifyIconA(NIM_MODIFY, @TrayIcon); { replacing the HICON is what animates the tray }
-  end;
+  ApplyTaskIcon(Wnd, Icon); { taskbar button, not the overflow chevron }
 
   if Controller.ShowDesktop then
   begin
@@ -199,17 +227,42 @@ begin
       begin
         LastTick := GetTickCount64;
         SetTimer(Wnd, 1, 33, nil); { ~30 FPS, same cadence as the Cocoa NSTimer }
+        AppendMenu(GetSystemMenu(Wnd, False), MF_SEPARATOR, 0, nil);
+        AppendMenu(GetSystemMenu(Wnd, False), MF_STRING, CmdDesktop, PChar('Desktop Eyes'#9'Ctrl+Shift+E'));
+        AppendMenu(GetSystemMenu(Wnd, False), MF_STRING, CmdAbout, PChar('About Eyes'));
+        AppendMenu(GetSystemMenu(Wnd, False), MF_STRING, CmdQuit, PChar('Quit Eyes'));
       end;
     WM_TIMER:
       TickFrame(Wnd);
     WM_PAINT:
       PaintDesk(Wnd);
+    WM_SIZE:
+      if WParam = SIZE_MINIMIZED then
+        Controller.ShowDesktop := False
+      else if (WParam = SIZE_RESTORED) or (WParam = SIZE_MAXIMIZED) then
+        Controller.ShowDesktop := True;
+    WM_CONTEXTMENU:
+      PopupMenuAtCursor(Wnd);
     WM_KEYDOWN:
       { Accelerator table is the real path; this catches the same chord if focus is here. }
       if (WParam = Ord('E')) and (GetKeyState(VK_CONTROL) < 0) and (GetKeyState(VK_SHIFT) < 0) then
       begin
         Controller.ToggleDesktop;
         SyncDesktop(Wnd);
+      end;
+    WM_SYSCOMMAND:
+      case LOWORD(WParam) of
+        CmdDesktop:
+          begin
+            Controller.ToggleDesktop;
+            SyncDesktop(Wnd);
+          end;
+        CmdAbout:
+          ShowAbout(Wnd);
+        CmdQuit:
+          PostQuitMessage(0);
+        else
+          Result := DefWindowProc(Wnd, Msg, WParam, LParam);
       end;
     WM_COMMAND:
       case LOWORD(WParam) of
@@ -223,28 +276,24 @@ begin
         CmdQuit:
           PostQuitMessage(0);
       end;
-    WmTray:
-      case LOWORD(LParam) of
-        WM_RBUTTONUP, WM_CONTEXTMENU:
-          PopupMenuAtCursor(Wnd);
-        WM_LBUTTONDBLCLK:
-          begin
-            Controller.ShowDesktop := True;
-            SyncDesktop(Wnd);
-          end;
-      end;
     WM_CLOSE:
       begin
-        { Hide, do not destroy — the tray extra stays, like closing the Mac window. }
-        Controller.ShowDesktop := False;
-        SyncDesktop(Wnd);
+        { First close tucks the large pair (taskbar extra stays). Close while
+          already iconic actually quits, so the jump-list Close still works. }
+        if IsIconic(Wnd) then
+          DestroyWindow(Wnd)
+        else
+        begin
+          Controller.ShowDesktop := False;
+          SyncDesktop(Wnd);
+        end;
       end;
     WM_DESTROY:
       begin
         KillTimer(Wnd, 1);
-        Shell_NotifyIconA(NIM_DELETE, @TrayIcon);
-        if TrayIcon.hIcon <> 0 then
-          DestroyIcon(TrayIcon.hIcon);
+        if TaskIcon <> 0 then
+          DestroyIcon(TaskIcon);
+        TaskIcon := 0;
         PostQuitMessage(0);
       end;
     else
@@ -261,13 +310,13 @@ var
   AccelTable: HACCEL;
 begin
   Controller := TEyesController.Create(BarW, BarH, DeskW * 2, DeskH * 2);
-  Controller.ShowDesktop := True; { Windows: window is how they appear on the taskbar }
+  Controller.ShowDesktop := True; { Windows: the window button is the extra }
 
   FillChar(WC, SizeOf(WC), 0);
   WC.lpfnWndProc := @WndProc;
   WC.hInstance := HInstance;
   WC.hCursor := LoadCursor(0, IDC_ARROW);
-  WC.hbrBackground := GetStockObject(LTGRAY_BRUSH);
+  WC.hbrBackground := CreateSolidBrush(DeskBack);
   WC.lpszClassName := AppName;
   RegisterClass(WC);
 
@@ -279,19 +328,10 @@ begin
     ScreenW - DeskW - 40, ScreenH - DeskH - 80, DeskW + 16, DeskH + 40,
     0, 0, HInstance, nil);
 
-  FillChar(TrayIcon, SizeOf(TrayIcon), 0);
-  TrayIcon.cbSize := SizeOf(TrayIcon);
-  TrayIcon.hWnd := MainWnd; { FPC's NOTIFYICONDATA, not Delphi's Wnd }
-  TrayIcon.uID := IdTray;
-  TrayIcon.uFlags := NIF_MESSAGE or NIF_ICON or NIF_TIP;
-  TrayIcon.uCallbackMessage := WmTray;
-  TrayIcon.hIcon := LoadIcon(0, IDI_APPLICATION);
-  lstrcpynA(@TrayIcon.szTip[0], 'Eyes', 128);
-  Shell_NotifyIconA(NIM_ADD, @TrayIcon);
-
   SyncDesktop(MainWnd);
   ShowWindow(MainWnd, SW_SHOW);
   UpdateWindow(MainWnd);
+  TickFrame(MainWnd); { first taskbar icon before the timer }
 
   FillChar(HotAccel, SizeOf(HotAccel), 0);
   HotAccel.fVirt := FCONTROL or FSHIFT or FVIRTKEY;

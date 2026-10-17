@@ -46,7 +46,7 @@ end;
 
 Accessory policy (plus `LSUIElement` in `bundle/Info.plist`) means: **no Dock icon**, menu extra only. `App.run` does not return until Quit.
 
-Windows: `HostRun` registers a window class, `CreateWindowEx`, `Shell_NotifyIcon(NIM_ADD)`, then `GetMessage`.  
+Windows: `HostRun` registers a window class, `CreateWindowEx`, then `GetMessage`. The small pair is `WM_SETICON` on that window (a notify-area icon would land under Hidden icons).  
 Linux: `gtk_init`, `gtk_status_icon_new`, `g_timeout_add(33, ...)`, `gtk_main`.
 
 ---
@@ -214,11 +214,11 @@ Quit: menu **Quit Eyes** → `NSApplication.terminate`. Close box on the desktop
 `WM_TIMER` → `TickFrame`:
 
 1. `Controller.Tick` with `GetCursorPos`.
-2. `RenderBar` aiming against the virtual screen (tray geometry is not queried).
-3. `CopyBGRA` + `CreateIconIndirect` + `Shell_NotifyIcon(NIM_MODIFY)`.
-4. If the window is shown: `RenderDesk` from the client rect in screen space, `InvalidateRect` → `WM_PAINT` `StretchDIBits`.
+2. `RenderBar` aiming against the virtual screen (the taskbar button has no geometry API here).
+3. `CopyBGRA` + `CreateIconIndirect` + `WM_SETICON` so the **taskbar** button is the extra.
+4. If the window is shown: `RenderDesk` from the client rect in screen space, `InvalidateRect` → `WM_PAINT` `StretchDIBits` onto a platinum fill.
 
-The window is `WS_EX_APPWINDOW`, so it has a **taskbar** button. Right-click the tray icon for the same menu idea.
+The window is `WS_EX_APPWINDOW`. Close minimises (button stays); close while already iconic quits.
 
 ---
 

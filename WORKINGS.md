@@ -162,10 +162,11 @@ It does **not** know about the mouse. It only paints a `TEyesPose`.
 
 ### `uhostwin` — Windows shell
 
-- Hidden-less overlapped window (`WS_EX_APPWINDOW or WS_EX_TOPMOST`) so it **appears on the taskbar**
-- `NOTIFYICONDATA` + `Shell_NotifyIcon(NIM_MODIFY)` for the notification-area icon
+- Overlapped window (`WS_EX_APPWINDOW or WS_EX_TOPMOST`) so the **taskbar button** is the extra
+- `WM_SETICON` each tick with a BGRA `HICON` (alpha mask so the pair is not a black tile)
+- Closing the large window **minimises** it; `SW_HIDE` would drop the button into nowhere
 - `WM_TIMER` 33 ms, `GetCursorPos`, `CopyBGRA` (Windows icons are BGRA)
-- Right-click tray → popup; double-click shows the desktop window
+- Right-click the window or Alt+Space for About / Quit
 
 ### `uhostgtk` — Linux shell
 
@@ -336,7 +337,7 @@ src/
   ueyesrender.pas   # RGBA ellipses, lids
   ueyesapp.pas      # controller, bar + desk buffers
   uhostcocoa.pas    # NSStatusItem, NSTimer, NSWindow
-  uhostwin.pas      # tray icon, WM_TIMER, taskbar HWND
+  uhostwin.pas      # taskbar HICON, WM_TIMER, desktop HWND
   uhostgtk.pas      # GtkStatusIcon, g_timeout_add
 bundle/Info.plist   # LSUIElement, NSHighResolutionCapable
 ```

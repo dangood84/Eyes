@@ -312,9 +312,15 @@ procedure RenderEyes(Buf: TPixelBuffer; const Pose: TEyesPose; Backdrop: Boolean
 var
   Layout: TEyesLayout;
 begin
-  Buf.Clear(0, 0, 0, 0); { extra is transparent against the menu bar }
   if Backdrop then
-    DrawBackdrop(Buf);   { desktop window gets a platinum plate }
+  begin
+    { Opaque plate first. StretchDIBits / a 32-bit DIB treat A=0 as black, so
+      the Mac-style transparent clear would frame the oval in black on Windows. }
+    Buf.Clear(232, 228, 218, 255);
+    DrawBackdrop(Buf);
+  end
+  else
+    Buf.Clear(0, 0, 0, 0); { extra is transparent against the menu bar }
   Layout := MakeLayout(Buf.Width, Buf.Height);
   DrawEye(Buf, Layout.LeftCX, Layout.CY, Layout.RX, Layout.RY,
     Pose.Left.X, Pose.Left.Y, Layout.PupilR, Pose.LidOpen);

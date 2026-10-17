@@ -29,7 +29,7 @@ Debian / Raspberry Pi OS:
 sudo apt install fpc libgtk2.0-dev
 ```
 
-Windows: a native Free Pascal install (the `Windows` / `ShellAPI` units ship with FPC).
+Windows: a native Free Pascal install (the `Windows` unit ships with FPC).
 
 ## Run
 
@@ -63,14 +63,14 @@ open build/Eyes.app
 2. Hover between the two eyes (or park the pointer on the menu extra itself). They go cross-eyed.
 3. Leave the mouse still for about 14 seconds to see a drowsy squint, or about 26 seconds to see them sleep.
 4. Click the menu-bar eyes for **Show Desktop Eyes**, **About Eyes**, and **Quit Eyes**. **⌘⇧E** (macOS) shows or hides the desktop pair even after they are tucked away. On Windows / Linux, **Ctrl+Shift+E** does the same while that window is focused.
-5. Close the desktop window to tuck the large pair away. The menu-bar pair stays put.
+5. Close the desktop window to tuck the large pair away. The menu-bar pair stays put. On Windows the small pair is the **taskbar** button (not the Hidden-icons overflow); closing the window minimises it so that button remains.
 
 ## Where they appear
 
 | OS | Presence |
 |----|----------|
 | **macOS** | Menu bar extra (right-hand extras). Optional floating desktop window. |
-| **Windows** | Notification-area icon **and** a taskbar window (always on top). |
+| **Windows** | Taskbar button (the small pair) **and** an optional always-on-top desktop window. |
 | **Linux** | GTK 2 status icon on the panel / menu bar (Raspberry Pi OS friendly), plus an optional desktop window. |
 
 ## Project layout
