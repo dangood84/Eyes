@@ -62,13 +62,15 @@ begin
   FillChar(Info, SizeOf(Info), 0);
   Info.bmiHeader.biSize := SizeOf(BITMAPINFOHEADER);
   Info.bmiHeader.biWidth := Buf.Width;
-  Info.bmiHeader.biHeight := -Buf.Height; { negative = top-down DIB, matches our y-down buffer }
+  Info.bmiHeader.biHeight := Buf.Height; { positive = bottom-up, matches the AND mask DDB }
   Info.bmiHeader.biPlanes := 1;
   Info.bmiHeader.biBitCount := 32;
   Info.bmiHeader.biCompression := BI_RGB;
   SetLength(Bgra, Buf.Width * Buf.Height * 4);
   CopyBGRA(Buf, @Bgra[0]);
-  { 1-bit AND mask from alpha, or the extra is a black tile on the taskbar. }
+  { DDBs and CreateIconIndirect are bottom-up. A top-down colour DIB with a
+    top-down mask punches the AND bits through the wrong half of the pair —
+    one pupil looks fine, the other looks inverted. }
   RowBytes := ((Buf.Width + 15) div 16) * 2;
   SetLength(MaskBits, RowBytes * Buf.Height);
   if Length(MaskBits) > 0 then
@@ -78,14 +80,17 @@ begin
     begin
       Alpha := Buf.Ptr[(Y * Buf.Width + X) * 4 + 3];
       if Alpha < 16 then
-        MaskBits[Y * RowBytes + X div 8] :=
-          MaskBits[Y * RowBytes + X div 8] or Byte($80 shr (X and 7));
+        MaskBits[(Buf.Height - 1 - Y) * RowBytes + X div 8] :=
+          MaskBits[(Buf.Height - 1 - Y) * RowBytes + X div 8] or Byte($80 shr (X and 7));
     end;
   DC := GetDC(0);
   Bits := nil;
   Dib := CreateDIBSection(DC, Info, DIB_RGB_COLORS, Bits, 0, 0);
   if (Dib <> 0) and (Bits <> nil) then
-    Move(Bgra[0], Bits^, Length(Bgra));
+    for Y := 0 to Buf.Height - 1 do
+      Move(Bgra[Y * Buf.Width * 4],
+        PByte(Bits)[(Buf.Height - 1 - Y) * Buf.Width * 4],
+        Buf.Width * 4);
   Mask := CreateBitmap(Buf.Width, Buf.Height, 1, 1, @MaskBits[0]);
   FillChar(IconInfo, SizeOf(IconInfo), 0);
   IconInfo.fIcon := True;
@@ -176,12 +181,36 @@ begin
     ShowWindow(Wnd, SW_MINIMIZE); { button stays; that is the Windows extra }
 end;
 
+function ClientScreenRect(Wnd: HWND): TRect;
+begin
+  GetClientRect(Wnd, @Result);
+  ClientToScreen(Wnd, PPoint(@Result.Left)^);
+  ClientToScreen(Wnd, PPoint(@Result.Right)^);
+end;
+
+function AimCanvas(Wnd: HWND; const Mouse: TPoint; CanvasW, CanvasH: Integer): TVec2;
+var
+  R: TRect;
+begin
+  { Same view as the large pair while it is up, or the two icons disagree and
+    one pupil looks “inverted” next to the window. }
+  if Controller.ShowDesktop and (not IsIconic(Wnd)) then
+  begin
+    R := ClientScreenRect(Wnd);
+    Result := MouseToCanvas(Mouse.X, Mouse.Y, R.Left, R.Top,
+      R.Right - R.Left, R.Bottom - R.Top, CanvasW, CanvasH, False);
+  end
+  else
+    Result := MouseToCanvas(Mouse.X, Mouse.Y, 0, 0,
+      GetSystemMetrics(SM_CXSCREEN), GetSystemMetrics(SM_CYSCREEN),
+      CanvasW, CanvasH, False);
+end;
+
 procedure TickFrame(Wnd: HWND);
 var
   NowTick: QWord;
   Dt: Double;
   Mouse: TPoint;
-  Client: TRect;
   Canvas: TVec2;
   Icon: HICON;
 begin
@@ -191,12 +220,8 @@ begin
   Mouse := MousePos;
   Controller.Tick(Dt, Mouse.X, Mouse.Y);
 
-  { Taskbar buttons have no geometry API here; aim against the virtual screen. }
-  Controller.RenderBar(
-    MouseToCanvas(Mouse.X, Mouse.Y, 0, 0, GetSystemMetrics(SM_CXSCREEN), GetSystemMetrics(SM_CYSCREEN),
-      Controller.Bar.Width, Controller.Bar.Height, False).X,
-    MouseToCanvas(Mouse.X, Mouse.Y, 0, 0, GetSystemMetrics(SM_CXSCREEN), GetSystemMetrics(SM_CYSCREEN),
-      Controller.Bar.Width, Controller.Bar.Height, False).Y);
+  Canvas := AimCanvas(Wnd, Mouse, Controller.Bar.Width, Controller.Bar.Height);
+  Controller.RenderBar(Canvas.X, Canvas.Y);
 
   SetLength(BgraBar, Controller.Bar.Width * Controller.Bar.Height * 4);
   CopyBGRA(Controller.Bar, @BgraBar[0]);
@@ -205,13 +230,7 @@ begin
 
   if Controller.ShowDesktop then
   begin
-    GetClientRect(Wnd, @Client);
-    { Client is local; pupils aim in screen space, so both corners go through ClientToScreen. }
-    ClientToScreen(Wnd, PPoint(@Client.Left)^);
-    ClientToScreen(Wnd, PPoint(@Client.Right)^);
-    Canvas := MouseToCanvas(Mouse.X, Mouse.Y, Client.Left, Client.Top,
-      Client.Right - Client.Left, Client.Bottom - Client.Top,
-      Controller.Desk.Width, Controller.Desk.Height, False);
+    Canvas := AimCanvas(Wnd, Mouse, Controller.Desk.Width, Controller.Desk.Height);
     Controller.RenderDesk(Canvas.X, Canvas.Y);
     SetLength(BgraDesk, Controller.Desk.Width * Controller.Desk.Height * 4);
     CopyBGRA(Controller.Desk, @BgraDesk[0]);
