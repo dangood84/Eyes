@@ -4,8 +4,8 @@ unit uhostwin;
 
 { Windows notification-area extra + optional desktop window. Same TEyesController
   as macOS / Linux; this unit only presents pixels (BGRA HICON + StretchDIBits).
-  The small pair is a tray icon, aimed with Shell_NotifyIconGetRect — the Win32
-  twin of gtk_status_icon_get_geometry and the status-item button bounds. }
+  Windows has no status-item bounds. We aim through one icon tile (GetRect if
+  it is actually a tile; otherwise the SysPager strip, never the clock). }
 
 interface
 
@@ -64,8 +64,14 @@ type
     szTip: array[0..127] of AnsiChar;
   end;
 
-  TNotifyIconIdentifier = record
+  { Packed to the SDK layout. A default-aligned record is 32 or 40 bytes on
+    Win64; Shell_NotifyIconGetRect wants 28 (x86) or 36 (x64) and otherwise
+    fails, after which we aimed at the clock and could not look right. }
+  TNotifyIconIdentifier = packed record
     cbSize: DWORD;
+{$IFDEF CPU64}
+    PadHwnd: DWORD;
+{$ENDIF}
     hWnd: HWND;
     uID: UINT;
     guidItem: TGUID;
@@ -78,6 +84,7 @@ function Shell_NotifyIconA(dwMessage: DWORD; var data: TTrayIconData): BOOL; std
 function Shell_NotifyIconGetRect(const identifier: TNotifyIconIdentifier;
   var iconLocation: TRect): HRESULT; stdcall;
   external 'shell32.dll' name 'Shell_NotifyIconGetRect';
+function EyesSetProcessDPIAware: BOOL; stdcall; external 'user32.dll' name 'SetProcessDPIAware';
 
 var
   Controller: TEyesController;
@@ -271,25 +278,97 @@ begin
   ClientToScreen(Wnd, PPoint(@Result.Right)^);
 end;
 
+function IsIconSized(const R: TRect): Boolean;
+var
+  Wd, Ht: Integer;
+begin
+  Wd := R.Right - R.Left;
+  Ht := R.Bottom - R.Top;
+  { One extra is a squat tile. The clock, notify cluster, or whole taskbar
+    are hundreds of pixels wide — mapping through those keeps the pupils
+    left of centre when the pointer is already right of the eyes. }
+  Result := (Wd >= 8) and (Ht >= 8) and (Wd <= 64) and (Ht <= 64);
+end;
+
+procedure TightIconBox(var R: TRect);
+var
+  Wd, Ht, Side: Integer;
+begin
+  if IsIconSized(R) then
+    Exit;
+  Wd := R.Right - R.Left;
+  Ht := R.Bottom - R.Top;
+  Side := Ht;
+  if Wd < Ht then
+    Side := Wd;
+  if Side < 16 then
+    Side := 16;
+  if Side > 40 then
+    Side := 40;
+  { Wide band: icons sit on the left, clock on the right. A box flush with
+    the right edge is the clock, so “pointer right of the tray” still aims
+    left of the view. }
+  if Wd >= Ht then
+  begin
+    R.Right := R.Left + Side;
+    R.Top := R.Top + (Ht - Side) div 2;
+    R.Bottom := R.Top + Side;
+  end
+  else
+  begin
+    R.Bottom := R.Top + Side;
+    R.Left := R.Left + (Wd - Side) div 2;
+    R.Right := R.Left + Side;
+  end;
+end;
+
 function ExtraRect(Wnd: HWND; out R: TRect): Boolean;
 var
   Id: TNotifyIconIdentifier;
 begin
-  { Vista+; same “where is my extra?” question GTK answers with get_geometry. }
   FillChar(Id, SizeOf(Id), 0);
   Id.cbSize := SizeOf(Id);
   Id.hWnd := Wnd;
   Id.uID := TrayId;
-  Result := (Shell_NotifyIconGetRect(Id, R) = S_OK) and
-    ((R.Right - R.Left) >= 4) and ((R.Bottom - R.Top) >= 4);
+  Result := (Shell_NotifyIconGetRect(Id, R) = S_OK) and IsIconSized(R);
+end;
+
+function NotifyBandRect(out R: TRect): Boolean;
+var
+  Tray, Notify, Pager, Tool: HWND;
+begin
+  { SysPager is the icon strip only — not the clock to its right. }
+  Result := False;
+  Tray := FindWindow('Shell_TrayWnd', nil);
+  if Tray = 0 then
+    Exit;
+  Notify := FindWindowEx(Tray, 0, 'TrayNotifyWnd', nil);
+  if Notify = 0 then
+    Exit;
+  Pager := FindWindowEx(Notify, 0, 'SysPager', nil);
+  Tool := 0;
+  if Pager <> 0 then
+    Tool := FindWindowEx(Pager, 0, 'ToolbarWindow32', nil);
+  if Tool = 0 then
+    Tool := FindWindowEx(Notify, 0, 'ToolbarWindow32', nil);
+  if Tool <> 0 then
+    Result := GetWindowRect(Tool, R)
+  else if Pager <> 0 then
+    Result := GetWindowRect(Pager, R)
+  else
+    Result := GetWindowRect(Notify, R);
 end;
 
 function FallbackExtraRect: TRect;
 var
   Data: TAppBarData;
+  Side, Inset: Integer;
 begin
-  { Icon not embedded yet: pretend the extra sits at the notify end of the bar,
-    the way Linux pretends top-right of the screen. }
+  if NotifyBandRect(Result) then
+  begin
+    TightIconBox(Result);
+    Exit;
+  end;
   FillChar(Data, SizeOf(Data), 0);
   Data.cbSize := SizeOf(Data);
   if SHAppBarMessage(ABM_GETTASKBARPOS, Data) <> 0 then
@@ -302,26 +381,32 @@ begin
     Result.Bottom := GetSystemMetrics(SM_CYSCREEN);
     Data.uEdge := ABE_BOTTOM;
   end;
+  Side := 24;
+  Inset := 72; { skip the clock / Show Desktop sliver }
   case Data.uEdge of
     ABE_LEFT:
       begin
-        Result.Top := Result.Bottom - BarH;
-        Result.Right := Result.Left + BarW;
+        Result.Top := Result.Bottom - Inset - Side;
+        Result.Bottom := Result.Top + Side;
+        Result.Right := Result.Left + Side;
       end;
     ABE_TOP:
       begin
-        Result.Left := Result.Right - BarW;
-        Result.Bottom := Result.Top + BarH;
+        Result.Left := Result.Right - Inset - Side;
+        Result.Right := Result.Left + Side;
+        Result.Bottom := Result.Top + Side;
       end;
     ABE_RIGHT:
       begin
-        Result.Top := Result.Bottom - BarH;
-        Result.Left := Result.Right - BarW;
+        Result.Top := Result.Bottom - Inset - Side;
+        Result.Bottom := Result.Top + Side;
+        Result.Left := Result.Right - Side;
       end;
     else
       begin
-        Result.Left := Result.Right - BarW;
-        Result.Top := Result.Bottom - BarH;
+        Result.Left := Result.Right - Inset - Side;
+        Result.Right := Result.Left + Side;
+        Result.Top := Result.Bottom - Side;
       end;
   end;
 end;
@@ -330,8 +415,11 @@ function AimBarCanvas(Wnd: HWND; const Mouse: TPoint): TVec2;
 var
   R: TRect;
 begin
+  { Windows has no status-item bounds. Use the icon tile only — never the
+    taskbar, the clock, or the whole notify cluster. }
   if not ExtraRect(Wnd, R) then
     R := FallbackExtraRect;
+  TightIconBox(R);
   Result := MouseToCanvas(Mouse.X, Mouse.Y, R.Left, R.Top,
     R.Right - R.Left, R.Bottom - R.Top,
     Controller.Bar.Width, Controller.Bar.Height, False);
@@ -474,6 +562,7 @@ var
   HotAccel: TACCEL; { not Accel: ACCEL — Pascal identifiers are case-blind }
   AccelTable: HACCEL;
 begin
+  EyesSetProcessDPIAware; { GetCursorPos and GetRect must share one pixel space }
   Controller := TEyesController.Create(BarW, BarH, DeskW * 2, DeskH * 2);
   Controller.ShowDesktop := True;
 
