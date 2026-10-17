@@ -16,7 +16,7 @@ implementation
 {$IFDEF WINDOWS}
 
 uses
-  Windows, Messages, SysUtils, ueyesmodel, ueyesrender, ueyesapp;
+  Windows, Messages, SysUtils, Variants, ActiveX, ueyesmodel, ueyesrender, ueyesapp;
 
 const
   AppName = 'EyesClassicPtr';
@@ -28,6 +28,50 @@ const
   DeskW = 240;
   DeskH = 120;
   DeskBack = (218 shl 16) or (228 shl 8) or 232; { platinum, same as RenderEyes }
+  ABM_GETTASKBARPOS = 5;
+  OBJID_CLIENT = DWORD($FFFFFFFC);
+  IID_IAccessible: TGUID = '{618736E0-3C3D-11CF-810C-00AA00389B71}';
+
+type
+  TAppBarData = record
+    cbSize: DWORD;
+    hWnd: HWND;
+    uCallbackMessage: UINT;
+    uEdge: UINT;
+    rc: TRect;
+    lParam: LPARAM;
+  end;
+
+  IAccessible = interface(IDispatch)
+    ['{618736E0-3C3D-11CF-810C-00AA00389B71}']
+    function Get_accParent(out ppdispParent: IDispatch): HRESULT; stdcall;
+    function Get_accChildCount(out pcountChildren: Integer): HRESULT; stdcall;
+    function Get_accChild(varChild: OleVariant; out ppdispChild: IDispatch): HRESULT; stdcall;
+    function Get_accName(varChild: OleVariant; out pszName: WideString): HRESULT; stdcall;
+    function Get_accValue(varChild: OleVariant; out pszValue: WideString): HRESULT; stdcall;
+    function Get_accDescription(varChild: OleVariant; out pszDescription: WideString): HRESULT; stdcall;
+    function Get_accRole(varChild: OleVariant; out pvarRole: OleVariant): HRESULT; stdcall;
+    function Get_accState(varChild: OleVariant; out pvarState: OleVariant): HRESULT; stdcall;
+    function Get_accHelp(varChild: OleVariant; out pszHelp: WideString): HRESULT; stdcall;
+    function Get_accHelpTopic(out pszHelpFile: WideString; varChild: OleVariant; out pidTopic: Integer): HRESULT; stdcall;
+    function Get_accKeyboardShortcut(varChild: OleVariant; out pszKeyboardShortcut: WideString): HRESULT; stdcall;
+    function Get_accFocus(out pvarChild: OleVariant): HRESULT; stdcall;
+    function Get_accSelection(out pvarChildren: OleVariant): HRESULT; stdcall;
+    function Get_accDefaultAction(varChild: OleVariant; out pszDefaultAction: WideString): HRESULT; stdcall;
+    function accSelect(flagsSelect: Integer; varChild: OleVariant): HRESULT; stdcall;
+    function accLocation(out pxLeft: Integer; out pyTop: Integer; out pcxWidth: Integer;
+      out pcyHeight: Integer; varChild: OleVariant): HRESULT; stdcall;
+    function accNavigate(navDir: Integer; varStart: OleVariant; out pvarEndUpAt: OleVariant): HRESULT; stdcall;
+    function accHitTest(xLeft: Integer; yTop: Integer; out pvarChild: OleVariant): HRESULT; stdcall;
+    function accDoDefaultAction(varChild: OleVariant): HRESULT; stdcall;
+    function Set_accName(varChild: OleVariant; const pszName: WideString): HRESULT; stdcall;
+    function Set_accValue(varChild: OleVariant; const pszValue: WideString): HRESULT; stdcall;
+  end;
+
+function SHAppBarMessage(dwMessage: DWORD; var pData: TAppBarData): UINT; stdcall;
+  external 'shell32.dll' name 'SHAppBarMessage';
+function AccessibleObjectFromWindow(hwnd: HWND; dwObjectID: DWORD; const riid: TGUID;
+  out ppvObject): HRESULT; stdcall; external 'oleacc.dll' name 'AccessibleObjectFromWindow';
 
 var
   Controller: TEyesController;
@@ -36,6 +80,9 @@ var
   LastTick: QWord;
   BgraBar: array of Byte;
   BgraDesk: array of Byte;
+  CachedBtn: TRect;
+  CachedBtnAt: QWord;
+  HaveCachedBtn: Boolean;
 
 function MousePos: TPoint;
 begin
@@ -188,22 +235,175 @@ begin
   ClientToScreen(Wnd, PPoint(@Result.Right)^);
 end;
 
-function AimCanvas(Wnd: HWND; const Mouse: TPoint; CanvasW, CanvasH: Integer): TVec2;
+function FindDescendantClass(Parent: HWND; const Cls: string): HWND;
+var
+  Child: HWND;
+begin
+  Result := FindWindowEx(Parent, 0, PChar(Cls), nil);
+  if Result <> 0 then
+    Exit;
+  Child := GetWindow(Parent, GW_CHILD);
+  while Child <> 0 do
+  begin
+    Result := FindDescendantClass(Child, Cls);
+    if Result <> 0 then
+      Exit;
+    Child := GetWindow(Child, GW_HWNDNEXT);
+  end;
+end;
+
+function AccName(Acc: IAccessible; Child: Integer): string;
+var
+  V: OleVariant;
+  W: WideString;
+begin
+  Result := '';
+  V := Child;
+  if (Acc.Get_accName(V, W) = S_OK) and (W <> '') then
+    Result := W;
+end;
+
+function AccRect(Acc: IAccessible; Child: Integer; out R: TRect): Boolean;
+var
+  V: OleVariant;
+  L, T, W, H: Integer;
+begin
+  Result := False;
+  V := Child;
+  if Acc.accLocation(L, T, W, H, V) <> S_OK then
+    Exit;
+  if (W < 4) or (H < 4) then
+    Exit;
+  R := Rect(L, T, L + W, T + H);
+  Result := True;
+end;
+
+function TitleMatchesButton(const Title, Button: string): Boolean;
+begin
+  Result := (Button <> '') and ((CompareText(Title, Button) = 0) or
+    (Pos(AnsiLowerCase(Title), AnsiLowerCase(Button)) = 1));
+end;
+
+function FindNamedAccRect(Acc: IAccessible; const Title: string; out R: TRect): Boolean;
+var
+  Count, I: Integer;
+  ChildDisp: IDispatch;
+  ChildAcc: IAccessible;
+  V: OleVariant;
+begin
+  Result := False;
+  if (Acc = nil) or (Title = '') then
+    Exit;
+  if Acc.Get_accChildCount(Count) <> S_OK then
+    Count := 0;
+  for I := 1 to Count do
+  begin
+    if TitleMatchesButton(Title, AccName(Acc, I)) and AccRect(Acc, I, R) then
+    begin
+      Result := True;
+      Exit;
+    end;
+    V := I;
+    ChildDisp := nil;
+    if (Acc.Get_accChild(V, ChildDisp) = S_OK) and (ChildDisp <> nil) and
+       (ChildDisp.QueryInterface(IAccessible, ChildAcc) = S_OK) then
+      if FindNamedAccRect(ChildAcc, Title, R) then
+      begin
+        Result := True;
+        Exit;
+      end;
+  end;
+end;
+
+function TaskbarButtonRect(AppWnd: HWND; out R: TRect): Boolean;
+var
+  Tray, List: HWND;
+  AccUnk: IUnknown;
+  Acc: IAccessible;
+  Title: array[0..255] of Char;
+  Abd: TAppBarData;
+  ListR: TRect;
+  Thick: Integer;
+begin
+  if HaveCachedBtn and (GetTickCount64 - CachedBtnAt < 500) then
+  begin
+    R := CachedBtn;
+    Result := True;
+    Exit;
+  end;
+  Result := False;
+  Tray := FindWindow('Shell_TrayWnd', nil);
+  List := 0;
+  if Tray <> 0 then
+    List := FindDescendantClass(Tray, 'MSTaskListWClass');
+  if (List <> 0) and (AccessibleObjectFromWindow(List, OBJID_CLIENT, IID_IAccessible, AccUnk) = S_OK) and
+     (AccUnk <> nil) and (AccUnk.QueryInterface(IAccessible, Acc) = S_OK) then
+  begin
+    FillChar(Title, SizeOf(Title), 0);
+    GetWindowText(AppWnd, Title, 255);
+    Result := FindNamedAccRect(Acc, string(Title), R);
+  end;
+  if Result then
+  begin
+    InflateRect(R, 2, 2);
+    CachedBtn := R;
+    CachedBtnAt := GetTickCount64;
+    HaveCachedBtn := True;
+    Exit;
+  end;
+  { Fallback: a square on the taskbar so Y is “up from the bar”, not the
+    whole desktop (which makes a pointer above the icon look left/down). }
+  FillChar(Abd, SizeOf(Abd), 0);
+  Abd.cbSize := SizeOf(Abd);
+  if SHAppBarMessage(ABM_GETTASKBARPOS, Abd) = 0 then
+    Exit;
+  if (List <> 0) and GetWindowRect(List, ListR) then
+    R := ListR
+  else
+    R := Abd.rc;
+  Thick := R.Bottom - R.Top;
+  if (R.Right - R.Left) < Thick then
+    Thick := R.Right - R.Left;
+  if Thick < 24 then
+    Thick := 40;
+  if Abd.uEdge in [0, 2] then { left / right bar: pin a square at the top of the strip }
+  begin
+    R.Bottom := R.Top + Thick;
+    R.Right := R.Left + Thick;
+  end
+  else
+  begin
+    R.Right := R.Left + Thick;
+    R.Bottom := R.Top + Thick;
+  end;
+  CachedBtn := R;
+  CachedBtnAt := GetTickCount64;
+  HaveCachedBtn := True;
+  Result := True;
+end;
+
+function AimDeskCanvas(Wnd: HWND; const Mouse: TPoint): TVec2;
 var
   R: TRect;
 begin
-  { Same view as the large pair while it is up, or the two icons disagree and
-    one pupil looks “inverted” next to the window. }
-  if Controller.ShowDesktop and (not IsIconic(Wnd)) then
-  begin
-    R := ClientScreenRect(Wnd);
+  R := ClientScreenRect(Wnd);
+  Result := MouseToCanvas(Mouse.X, Mouse.Y, R.Left, R.Top,
+    R.Right - R.Left, R.Bottom - R.Top, Controller.Desk.Width, Controller.Desk.Height, False);
+end;
+
+function AimBarCanvas(Wnd: HWND; const Mouse: TPoint): TVec2;
+var
+  R: TRect;
+begin
+  { The extra lives on the taskbar button. Aiming at the desktop window (or
+    the whole screen) makes a pointer above the icon look “side on to the left”. }
+  if TaskbarButtonRect(Wnd, R) then
     Result := MouseToCanvas(Mouse.X, Mouse.Y, R.Left, R.Top,
-      R.Right - R.Left, R.Bottom - R.Top, CanvasW, CanvasH, False);
-  end
+      R.Right - R.Left, R.Bottom - R.Top, Controller.Bar.Width, Controller.Bar.Height, False)
   else
     Result := MouseToCanvas(Mouse.X, Mouse.Y, 0, 0,
       GetSystemMetrics(SM_CXSCREEN), GetSystemMetrics(SM_CYSCREEN),
-      CanvasW, CanvasH, False);
+      Controller.Bar.Width, Controller.Bar.Height, False);
 end;
 
 procedure TickFrame(Wnd: HWND);
@@ -220,7 +420,7 @@ begin
   Mouse := MousePos;
   Controller.Tick(Dt, Mouse.X, Mouse.Y);
 
-  Canvas := AimCanvas(Wnd, Mouse, Controller.Bar.Width, Controller.Bar.Height);
+  Canvas := AimBarCanvas(Wnd, Mouse);
   Controller.RenderBar(Canvas.X, Canvas.Y);
 
   SetLength(BgraBar, Controller.Bar.Width * Controller.Bar.Height * 4);
@@ -230,7 +430,7 @@ begin
 
   if Controller.ShowDesktop then
   begin
-    Canvas := AimCanvas(Wnd, Mouse, Controller.Desk.Width, Controller.Desk.Height);
+    Canvas := AimDeskCanvas(Wnd, Mouse);
     Controller.RenderDesk(Canvas.X, Canvas.Y);
     SetLength(BgraDesk, Controller.Desk.Width * Controller.Desk.Height * 4);
     CopyBGRA(Controller.Desk, @BgraDesk[0]);
@@ -328,6 +528,7 @@ var
   HotAccel: TACCEL; { not Accel: ACCEL — Pascal identifiers are case-blind }
   AccelTable: HACCEL;
 begin
+  CoInitialize(nil); { IAccessible walk of the taskbar button }
   Controller := TEyesController.Create(BarW, BarH, DeskW * 2, DeskH * 2);
   Controller.ShowDesktop := True; { Windows: the window button is the extra }
 
@@ -369,6 +570,7 @@ begin
   if AccelTable <> 0 then
     DestroyAcceleratorTable(AccelTable);
   Controller.Free;
+  CoUninitialize;
 end;
 
 {$ELSE}
