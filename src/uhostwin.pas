@@ -25,6 +25,13 @@ const
   CmdQuit = 1003;
   TrayId = 1;
   WM_TRAY = WM_APP + 1;
+  { FPC's Windows unit does not publish these shell32 tray flags. }
+  NIM_ADD = 0;
+  NIM_MODIFY = 1;
+  NIM_DELETE = 2;
+  NIF_MESSAGE = 1;
+  NIF_ICON = 2;
+  NIF_TIP = 4;
   BarW = 48; { same wide pair as the Linux extra }
   BarH = 24;
   DeskW = 240;
