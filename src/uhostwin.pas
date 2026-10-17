@@ -266,15 +266,19 @@ end;
 function AccRect(Acc: IAccessible; Child: Integer; out R: TRect): Boolean;
 var
   V: OleVariant;
-  L, T, W, H: Integer;
+  Lft, Tp, Wd, Ht: Integer;
 begin
   Result := False;
   V := Child;
-  if Acc.accLocation(L, T, W, H, V) <> S_OK then
+  if Acc.accLocation(Lft, Tp, Wd, Ht, V) <> S_OK then
     Exit;
-  if (W < 4) or (H < 4) then
+  if (Wd < 4) or (Ht < 4) then
     Exit;
-  R := Rect(L, T, L + W, T + H);
+  { Windows.Rect is a type, not SysUtils.Rect(). }
+  R.Left := Lft;
+  R.Top := Tp;
+  R.Right := Lft + Wd;
+  R.Bottom := Tp + Ht;
   Result := True;
 end;
 
